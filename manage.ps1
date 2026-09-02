@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'menu')]
     [string]$Command = 'status',
 
     [int]$Lines = 20
@@ -77,6 +77,7 @@ function Start-Bot {
     } else {
         Write-Host 'Процесс не удержался. Последние строки ошибок:' -ForegroundColor Red
         if (Test-Path $ErrFile) { Get-Content $ErrFile -Tail 15 }
+        Remove-Item $PidFile -ErrorAction SilentlyContinue
     }
 }
 
@@ -134,7 +135,37 @@ function Show-Status {
     }
 }
 
+function Show-Menu {
+    # Reached by double-clicking manage.bat, where a window that ran one command
+    # and closed would tell the user nothing.
+    while ($true) {
+        Write-Host ''
+        Write-Host '===============================' -ForegroundColor Cyan
+        Write-Host '  Xbox Achievement Bot'          -ForegroundColor Cyan
+        Write-Host '===============================' -ForegroundColor Cyan
+        Write-Host '  1  статус'
+        Write-Host '  2  запустить'
+        Write-Host '  3  остановить'
+        Write-Host '  4  перезапустить'
+        Write-Host '  5  логи (30 строк)'
+        Write-Host '  0  выход'
+        Write-Host ''
+        $answer = Read-Host 'Что делаем?'
+        Write-Host ''
+        switch ($answer) {
+            '1' { Show-Status }
+            '2' { Start-Bot }
+            '3' { Stop-Bot }
+            '4' { Stop-Bot; Start-Sleep -Seconds 1; Start-Bot }
+            '5' { if (Test-Path $LogFile) { Get-Content $LogFile -Tail 30 } else { Write-Host 'Логов пока нет.' } }
+            '0' { return }
+            default { Write-Host 'Не понял. Нужна цифра из списка.' -ForegroundColor Yellow }
+        }
+    }
+}
+
 switch ($Command) {
+    'menu'    { Show-Menu }
     'start'   { Start-Bot }
     'stop'    { Stop-Bot }
     'restart' { Stop-Bot; Start-Sleep -Seconds 1; Start-Bot }

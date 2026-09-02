@@ -16,6 +16,7 @@ from bot.handlers import connect as connect_handlers
 from bot.handlers import panel as panel_handlers
 from bot.handlers.chat import UsernameMiddleware
 from bot.handlers.keyboards import timezone_keyboard
+from bot.lock import AlreadyRunningError, single_instance
 from bot.poller.fetcher import Fetcher
 from bot.poller.presence import PresencePoller
 from bot.poller.publisher import Publisher
@@ -128,10 +129,23 @@ async def run(settings: Settings) -> None:
 def main() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
+
+    lock_path = settings.db_path.parent / "bot.lock"
     try:
-        asyncio.run(run(settings))
-    except (KeyboardInterrupt, SystemExit):
-        log.info("stopped")
+        with single_instance(lock_path):
+            try:
+                asyncio.run(run(settings))
+            except (KeyboardInterrupt, SystemExit):
+                log.info("stopped")
+    except AlreadyRunningError:
+        # Not a traceback: this is a normal thing to do by mistake.
+        print(
+            "Бот уже запущен — вторая копия не нужна.\n"
+            "Два бота с одним токеном отбирают друг у друга сообщения Telegram.\n"
+            "Состояние: manage.bat status",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
