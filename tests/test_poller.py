@@ -57,6 +57,9 @@ class FakeClient:
     async def title_history(self, tg_id, max_items: int = 200):
         return self.history
 
+    async def gamerscore(self, tg_id):
+        return 35776
+
 
 class FakePublisher:
     def __init__(self) -> None:

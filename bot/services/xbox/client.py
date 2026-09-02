@@ -137,12 +137,30 @@ class XboxClient:
     async def title_achievements(
         self, tg_id: int, title_id: str, platform: Platform
     ) -> list[ParsedAchievement]:
-        """Achievements of one game — the only request that carries rarity."""
-        contract = "1" if platform == "x360" else "4"
-        payload = await self._get_achievements(
-            tg_id, contract, {"titleId": title_id, "maxItems": str(PAGE_SIZE)}
+        """Achievements of one game — the only request that carries rarity.
+
+        `platform` is a hint from presence, and presence reports the *console*,
+        not the game: an Xbox 360 title played through back-compat on a Series X
+        arrives here as "modern". Contract 4 answers such a title with an empty
+        list, while a modern title always returns its full set (including
+        NotStarted), so an empty answer means "wrong contract", not "no
+        achievements" — and we ask again as Xbox 360. Without this a whole
+        back-compat session would be published as nothing at all.
+        """
+        params = {"titleId": title_id, "maxItems": str(PAGE_SIZE)}
+        if platform == "x360":
+            return parse_achievements(
+                await self._get_achievements(tg_id, "1", params), "x360", title_id
+            )
+
+        payload = await self._get_achievements(tg_id, "4", params)
+        if payload.get("achievements"):
+            return parse_achievements(payload, "modern", title_id)
+
+        log.info("title %s looks like Xbox 360, retrying on contract 1", title_id)
+        return parse_achievements(
+            await self._get_achievements(tg_id, "1", params), "x360", title_id
         )
-        return parse_achievements(payload, platform, title_id)
 
     async def all_achievements(self, tg_id: int) -> list[ParsedAchievement]:
         """Every achievement of the player, for backfill only (SPEC 5.6).
@@ -206,6 +224,33 @@ class XboxClient:
             return payload if isinstance(payload, dict) else {}
 
         raise XboxApiError("achievements request gave up")
+
+    async def gamerscore(self, tg_id: int) -> int | None:
+        """The real total from the profile.
+
+        Summing title history would understate it: the history request is
+        capped, and an account with more titles than the cap silently loses the
+        rest of its score.
+        """
+        manager = await self._auth.authenticated_manager(tg_id)
+        assert manager.xsts_token is not None
+        client = XboxLiveClient(manager)
+        await self._limiter.acquire()
+        try:
+            response = await client.profile.get_profile_by_xuid(manager.xsts_token.xuid)
+        except httpx.HTTPStatusError as exc:
+            raise _translate(exc) from None
+        except httpx.RequestError as exc:
+            raise XboxApiError(f"profile request failed: {exc}") from None
+
+        for user in getattr(response, "profile_users", None) or []:
+            for setting in getattr(user, "settings", None) or []:
+                if getattr(setting, "id", None) == "Gamerscore":
+                    try:
+                        return int(setting.value)
+                    except (TypeError, ValueError):
+                        return None
+        return None
 
     # -------------------------------------------------------- title history
 

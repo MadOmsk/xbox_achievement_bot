@@ -94,7 +94,17 @@ class Fetcher:
         if not rows:
             return
         await self._repo.save_title_history(xuid, rows)
-        await self._repo.update_gamerscore(tg_id, sum(row.current_gamerscore or 0 for row in rows))
+
+        # From the profile, not from the sum above: the title history request is
+        # capped, so an account with more games than the cap would show too low
+        # a score.
+        try:
+            total = await self._client.gamerscore(tg_id)
+        except XboxApiError as exc:
+            log.info("gamerscore for tg_id=%s not refreshed: %s", tg_id, exc)
+            return
+        if total is not None:
+            await self._repo.update_gamerscore(tg_id, total)
 
 
 def _to_row(item: ParsedAchievement) -> AchievementRow:
