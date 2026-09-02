@@ -175,7 +175,7 @@ switch ($Command) {
         Get-Content $LogFile -Tail $Lines
         if ((Test-Path $ErrFile) -and (Get-Item $ErrFile).Length -gt 0) {
             Write-Host ''
-            Write-Host 'Ошибки (logsot.err.log):' -ForegroundColor Red
+            Write-Host 'Ошибки (logs\bot.err.log):' -ForegroundColor Red
             Get-Content $ErrFile -Tail $Lines
         }
     }
