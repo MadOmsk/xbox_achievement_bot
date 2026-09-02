@@ -41,6 +41,10 @@ class Settings(BaseSettings):
 
     backfill_concurrency: int = 2
 
+    # Catch-up after downtime (SPEC 5.8)
+    catchup_publish_window_hours: int = 24
+    catchup_max_titles: int = 20
+
     db_path: Path = Path("data/bot.db")
     log_level: str = "INFO"
     tz: str = "Europe/Moscow"

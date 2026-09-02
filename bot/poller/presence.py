@@ -23,6 +23,12 @@ log = logging.getLogger(__name__)
 
 IDLE_AFTER_SECONDS = 2 * 3600
 
+# The tick fires every 60s, but a timestamp is written a moment after the tick
+# begins, so the next tick measures 59.x seconds and decides it is too early.
+# Every interval would then silently double: presence once in two minutes,
+# achievements once in four. The tolerance must be smaller than the tick.
+DUE_TOLERANCE_SECONDS = 5
+
 
 class PresencePoller:
     def __init__(
@@ -104,13 +110,13 @@ class PresencePoller:
         if last is None:
             return True
         elapsed = (utcnow() - last).total_seconds()
-        return elapsed >= self._settings.achievement_poll_interval
+        return elapsed >= self._settings.achievement_poll_interval - DUE_TOLERANCE_SECONDS
 
     def _is_due(self, target: PollTarget) -> bool:
         last = parse_iso(target.updated_at)
         if last is None:
             return True
-        return (utcnow() - last).total_seconds() >= self._interval(target)
+        return (utcnow() - last).total_seconds() >= self._interval(target) - DUE_TOLERANCE_SECONDS
 
     def _interval(self, target: PollTarget) -> int:
         """Sparser polling of absent people is politeness, not thrift: the

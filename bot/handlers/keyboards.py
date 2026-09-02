@@ -56,6 +56,7 @@ def panel_keyboard(tz_offset_min: int | None) -> InlineKeyboardMarkup:
                     callback_data="panel:tz",
                 )
             ],
+            [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
             [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
         ]
     )

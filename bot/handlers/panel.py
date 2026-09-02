@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
+from bot.config import Settings
 from bot.db.repo import Repo
 from bot.handlers.keyboards import (
     deep_link_keyboard,
@@ -18,12 +20,19 @@ from bot.handlers.keyboards import (
     panel_keyboard,
     timezone_keyboard,
 )
+from bot.poller.fetcher import Fetcher
+from bot.util import parse_iso
 
 log = logging.getLogger(__name__)
 
 router = Router(name="panel")
 
 GROUP_HINT_TTL = 30
+
+# The one panel button that goes to the network (SPEC 5.8). Without a cooldown
+# it is a way to hammer Xbox Live by holding a finger on the keyboard.
+SYNC_COOLDOWN_SECONDS = 600
+_last_sync: dict[int, float] = {}
 
 LOGIN_STATUS = {
     "active": "✅ активен",
@@ -59,6 +68,51 @@ async def panel_refresh(callback: CallbackQuery, repo: Repo) -> None:
             # Telegram rejects an edit that changes nothing; that is not an error.
             await callback.message.edit_text(text, reply_markup=markup)
     await callback.answer("Обновил")
+
+
+@router.callback_query(F.data == "panel:sync")
+async def panel_sync(
+    callback: CallbackQuery, repo: Repo, fetcher: Fetcher, settings: Settings
+) -> None:
+    """Catch up on what was unlocked while the bot was down (SPEC 5.8)."""
+    tg_id = callback.from_user.id
+    user = await repo.get_user(tg_id)
+    if user is None or not user.xuid:
+        await callback.answer("Сначала подключи Xbox: /connect", show_alert=True)
+        return
+
+    waited = time.monotonic() - _last_sync.get(tg_id, float("-inf"))
+    if waited < SYNC_COOLDOWN_SECONDS:
+        minutes = int((SYNC_COOLDOWN_SECONDS - waited) // 60) + 1
+        await callback.answer(f"Уже синхронизировал. Ещё раз — через {minutes} мин.")
+        return
+
+    _last_sync[tg_id] = time.monotonic()
+    await callback.answer("Синхронизирую…")
+
+    target = next((t for t in await repo.pollable_users() if t.tg_id == tg_id), None)
+    try:
+        titles, published = await fetcher.catch_up(
+            tg_id,
+            user.xuid,
+            user.gamertag or "Игрок",
+            parse_iso(target.updated_at) if target else None,
+            settings.catchup_publish_window_hours,
+            settings.catchup_max_titles,
+        )
+    except Exception:
+        log.exception("manual catch-up for tg_id=%s failed", tg_id)
+        if isinstance(callback.message, Message):
+            await callback.message.answer("Не получилось синхронизироваться, попробуй позже.")
+        return
+
+    summary = (
+        f"Проверил игр: {titles}. Новых ачивок в чат: {published}."
+        if titles
+        else "Ничего нового — с последнего опроса ты никуда не заходил."
+    )
+    if isinstance(callback.message, Message):
+        await callback.message.answer(summary)
 
 
 @router.callback_query(F.data == "panel:tz")

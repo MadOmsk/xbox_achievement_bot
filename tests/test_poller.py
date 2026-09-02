@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from bot.db.repo import AchievementRow, Repo
 from bot.poller.fetcher import Fetcher
 from bot.poller.reminders import MAX_REMINDERS, REMINDER_INTERVAL_HOURS, ReminderJob
 from bot.services.xbox.models import ParsedAchievement
+from bot.util import utcnow
 
 TG_ID = 42
 XUID = "2533274829605736"
@@ -209,3 +211,59 @@ async def test_title_name_is_resolved_once_when_presence_has_none(repo: Repo, ci
     client.by_title["85494077"].append(parsed("a2", title_id="85494077"))
     await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "85494077", "modern", None)
     assert client.resolved == ["85494077"]
+
+
+def parsed_at(achievement_id: str, when, title_id: str = "1") -> ParsedAchievement:
+    item = parsed(achievement_id, title_id=title_id)
+    item.unlocked_at = when
+    return item
+
+
+async def test_catch_up_publishes_only_what_is_fresh(repo: Repo, cipher) -> None:
+    """After a fortnight of downtime a chat does not want the archive; after a
+    one-minute restart nothing may be lost (SPEC 5.8)."""
+    await _connected_user(repo, cipher)
+    now = utcnow()
+    client = FakeClient(
+        by_title={
+            "1": [
+                parsed_at("recent", now - timedelta(hours=2)),
+                parsed_at("ancient", now - timedelta(days=9)),
+                parsed_at("undated", None),
+            ]
+        },
+        history=[FakeHistoryEntry("1", "Gears of War", "modern")],
+    )
+    publisher = FakePublisher()
+    fetcher = Fetcher(repo, client, publisher)  # type: ignore[arg-type]
+
+    titles, published = await fetcher.catch_up(
+        TG_ID, XUID, "Mad Omsk", now - timedelta(days=14), 24, 20
+    )
+
+    assert titles == 1
+    assert published == 1
+    assert [a.achievement_id for a in publisher.published[0]] == ["recent"]
+    # The old ones are still recorded, so they never surface again as "new".
+    assert await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "1", "modern", "Gears") == 0
+
+
+async def test_catch_up_skips_games_untouched_since_last_poll(repo: Repo, cipher) -> None:
+    await _connected_user(repo, cipher)
+    now = utcnow()
+    client = FakeClient(
+        by_title={"1": [parsed_at("a1", now)]},
+        history=[
+            FakeHistoryEntry(
+                "1", "Gears of War", "modern", last_played_at=(now - timedelta(days=3)).isoformat()
+            )
+        ],
+    )
+    fetcher = Fetcher(repo, client, FakePublisher())  # type: ignore[arg-type]
+
+    titles, published = await fetcher.catch_up(
+        TG_ID, XUID, "Mad Omsk", now - timedelta(hours=1), 24, 20
+    )
+
+    assert (titles, published) == (0, 0)
+    assert client.title_calls == []

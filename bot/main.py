@@ -26,6 +26,7 @@ from bot.services.connect import ConnectService
 from bot.services.crypto import TokenCipher
 from bot.services.xbox.auth import XboxAuthService, XboxIdentity
 from bot.services.xbox.client import XboxClient
+from bot.util import parse_iso
 from bot.web.oauth import OAuthServer
 
 log = logging.getLogger(__name__)
@@ -105,13 +106,36 @@ async def run(settings: Settings) -> None:
     dispatcher = Dispatcher()
     dispatcher["repo"] = repo
     dispatcher["connect"] = connect_service
+    dispatcher["fetcher"] = fetcher
+    dispatcher["settings"] = settings
     dispatcher.message.outer_middleware(UsernameMiddleware(repo))
     dispatcher.include_router(connect_handlers.router)
     dispatcher.include_router(panel_handlers.router)
     dispatcher.include_router(chat_handlers.router)
 
+    async def startup_catch_up() -> None:
+        """Pick up what happened while the bot was down (SPEC 5.8).
+
+        In the background: a restart must not wait for the network before it
+        starts answering people.
+        """
+        for target in await repo.pollable_users():
+            user = await repo.get_user(target.tg_id)
+            try:
+                await fetcher.catch_up(
+                    target.tg_id,
+                    target.xuid,
+                    (user.gamertag if user else None) or "Игрок",
+                    parse_iso(target.updated_at),
+                    settings.catchup_publish_window_hours,
+                    settings.catchup_max_titles,
+                )
+            except Exception:
+                log.exception("catch-up for tg_id=%s failed", target.tg_id)
+
     await publisher.start()
     scheduler.start()
+    asyncio.create_task(startup_catch_up())  # noqa: RUF006
 
     me = await bot.me()
     log.info("bot @%s is up", me.username)
