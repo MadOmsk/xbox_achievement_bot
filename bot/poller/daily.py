@@ -17,7 +17,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
 from bot.services.stats import global_offset_minutes, local_now
-from bot.services.tables import GREEN, render_table, total_line
+from bot.services.tables import render_table, total_line
 from bot.util import thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -114,12 +114,12 @@ async def build_summary(repo: Repo, chat_id: int, threshold: float, today: date)
     )
 
     lines = [
-        f"{GREEN} <b>24 часа</b>, {today.day} {MONTHS[today.month - 1]}",
+        f"📊 <b>24 часа</b>, {today.day} {MONTHS[today.month - 1]}",
         "",
         *_section(day_rows),
     ]
     if month_rows:
-        lines += ["", f"{GREEN} <b>30 дней</b>", "", *_section(month_rows)]
+        lines += ["", "📊 <b>30 дней</b>", "", *_section(month_rows)]
     return "\n".join(lines)
 
 

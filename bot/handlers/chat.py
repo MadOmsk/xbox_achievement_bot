@@ -40,7 +40,7 @@ from bot.services.stats import (
     local_now,
     month_start_utc,
 )
-from bot.services.tables import GREEN, render_table, total_line
+from bot.services.tables import render_table, total_line
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -137,7 +137,7 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
         repo, target.xuid, settings_row.tz_offset_min if settings_row else None
     )
     lines = [
-        f"{GREEN} <b>{target.gamertag or 'без геймертега'}</b>  ·  "
+        f"📊 <b>{target.gamertag or 'без геймертега'}</b>  ·  "
         f"gamerscore {thousands(target.gamerscore or 0)}",
         "",
         f"Сегодня:   {plural_achievements(counters.today)} (+{counters.today_score} G)",
@@ -149,7 +149,7 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
     if games:
         lines += [
             "",
-            f"{GREEN} <b>Игры за {RECENT_GAMES_DAYS} дней</b>",
+            f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>",
             "",
             render_table(
                 ["#", "Игра", "Ач.", "+G"],
@@ -230,7 +230,7 @@ async def top(message: Message, repo: Repo) -> None:
         ],
         ["<", "<", ">", ">", ">"],
     )
-    await message.answer(f"{GREEN} <b>За месяц</b>\n\n{table}", parse_mode=ParseMode.HTML)
+    await message.answer(f"🏆 <b>За месяц</b>\n\n{table}", parse_mode=ParseMode.HTML)
 
 
 async def _summary_or_cooldown(repo: Repo, chat_id: int) -> tuple[str | None, int]:

@@ -14,8 +14,6 @@ from html import escape as html_escape
 
 Align = str  # "<" (left) or ">" (right)
 
-GREEN = "🟢"
-
 
 def render_table(headers: list[str], rows: list[list[str]], aligns: list[Align]) -> str:
     """A `<pre>` block with a header row and padded columns.
@@ -44,4 +42,4 @@ def render_table(headers: list[str], rows: list[list[str]], aligns: list[Align])
 def total_line(label: str, text: str) -> str:
     """The one line every table-plus-total block ends with, highlighted the
     same way everywhere so it reads as a total, not another table row."""
-    return f"{GREEN} <b>{label}:</b> {text}"
+    return f"<b>{label}:</b> {text}"
