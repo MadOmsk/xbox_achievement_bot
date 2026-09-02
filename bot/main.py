@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -34,6 +35,10 @@ def setup_logging(level: str) -> None:
         level=level.upper(),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
+        # stdout, not the default stderr: manage.ps1 redirects the two streams
+        # to different files, and ordinary progress in the error log is noise
+        # that hides real tracebacks.
+        stream=sys.stdout,
     )
 
 

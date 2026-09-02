@@ -24,3 +24,7 @@ Thumbs.db
 
 # Session logs — kept locally, decisions live in SPEC.md
 history.md
+
+# Runtime artefacts
+logs/
+*.pid

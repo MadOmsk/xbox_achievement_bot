@@ -7,3 +7,7 @@
 *.db binary
 *.png binary
 *.jpg binary
+
+# Windows PowerShell 5.1 reads .ps1 in the system codepage unless the file
+# has a UTF-8 BOM, and Cyrillic strings then break the parser.
+*.ps1 text eol=crlf working-tree-encoding=UTF-8
