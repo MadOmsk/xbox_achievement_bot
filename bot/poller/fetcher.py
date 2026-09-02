@@ -40,9 +40,30 @@ class Fetcher:
             return 0
 
         log.info("tg_id=%s unlocked %s new achievements in %s", tg_id, len(new_rows), title_id)
-        stored_name = title_name or await self._repo.title_name(title_id)
-        await self._publisher.publish(tg_id, xuid, gamertag, new_rows, stored_name)
+        resolved = await self._title_name(tg_id, title_id, title_name)
+        await self._publisher.publish(tg_id, xuid, gamertag, new_rows, resolved)
         return len(new_rows)
+
+    async def _title_name(self, tg_id: int, title_id: str, from_presence: str | None) -> str | None:
+        """Presence leaves the name empty for PC titles, so ask titlehub once.
+
+        "неизвестная игра" in a published message is worse than one extra
+        request per game we have never seen.
+        """
+        if from_presence:
+            return from_presence
+        cached = await self._repo.title_name(title_id)
+        if cached:
+            return cached
+        try:
+            entry = await self._client.resolve_title(tg_id, title_id)
+        except XboxApiError as exc:
+            log.info("could not resolve title %s: %s", title_id, exc)
+            return None
+        if entry is None or not entry.name:
+            return None
+        await self._repo.upsert_title(entry.title_id, entry.name, entry.platform)
+        return entry.name
 
     async def backfill(self, tg_id: int, xuid: str) -> int:
         """Mark everything already unlocked as seen, publishing nothing.

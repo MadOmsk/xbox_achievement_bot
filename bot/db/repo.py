@@ -598,6 +598,15 @@ class Repo:
         )
         await self._conn.commit()
 
+    async def upsert_title(self, title_id: str, name: str, platform: str | None) -> None:
+        await self._conn.execute(
+            "INSERT INTO titles (title_id, name, platform, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(title_id) DO UPDATE SET name = excluded.name,"
+            " platform = excluded.platform, updated_at = excluded.updated_at",
+            (title_id, name, platform, utcnow_iso()),
+        )
+        await self._conn.commit()
+
     async def title_name(self, title_id: str) -> str | None:
         cursor = await self._conn.execute("SELECT name FROM titles WHERE title_id = ?", (title_id,))
         row = await cursor.fetchone()

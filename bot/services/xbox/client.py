@@ -252,6 +252,27 @@ class XboxClient:
                         return None
         return None
 
+    async def resolve_title(self, tg_id: int, title_id: str) -> TitleHistoryEntry | None:
+        """Look one game up by id.
+
+        Presence returns an empty name for PC titles (seen live on
+        WindowsOneCore), and a message saying "неизвестная игра" is worse than
+        one extra request per new game — the answer is cached in `titles`.
+        """
+        manager = await self._auth.authenticated_manager(tg_id)
+        client = XboxLiveClient(manager)
+        await self._limiter.acquire()
+        try:
+            response = await client.titlehub.get_title_info(title_id)
+        except httpx.HTTPStatusError as exc:
+            raise _translate(exc) from None
+        except httpx.RequestError as exc:
+            raise XboxApiError(f"title info request failed: {exc}") from None
+
+        for title in response.titles or []:
+            return _as_entry(title)
+        return None
+
     # -------------------------------------------------------- title history
 
     async def title_history(self, tg_id: int, max_items: int = 200) -> list[TitleHistoryEntry]:
@@ -269,24 +290,23 @@ class XboxClient:
         except httpx.RequestError as exc:
             raise XboxApiError(f"title history request failed: {exc}") from None
 
-        entries: list[TitleHistoryEntry] = []
-        for title in response.titles or []:
-            achievement = getattr(title, "achievement", None)
-            history = getattr(title, "title_history", None)
-            devices = getattr(title, "devices", None) or []
-            entries.append(
-                TitleHistoryEntry(
-                    title_id=str(title.title_id),
-                    name=title.name or "",
-                    platform="x360" if any(d in X360_DEVICES for d in devices) else "modern",
-                    current_gamerscore=getattr(achievement, "current_gamerscore", None),
-                    max_gamerscore=getattr(achievement, "total_gamerscore", None),
-                    achievements_unlocked=getattr(achievement, "current_achievements", None),
-                    achievements_total=getattr(achievement, "total_achievements", None),
-                    last_played_at=_as_iso(getattr(history, "last_time_played", None)),
-                )
-            )
-        return entries
+        return [_as_entry(title) for title in response.titles or []]
+
+
+def _as_entry(title: object) -> TitleHistoryEntry:
+    achievement = getattr(title, "achievement", None)
+    history = getattr(title, "title_history", None)
+    devices = getattr(title, "devices", None) or []
+    return TitleHistoryEntry(
+        title_id=str(title.title_id),
+        name=title.name or "",
+        platform="x360" if any(d in X360_DEVICES for d in devices) else "modern",
+        current_gamerscore=getattr(achievement, "current_gamerscore", None),
+        max_gamerscore=getattr(achievement, "total_gamerscore", None),
+        achievements_unlocked=getattr(achievement, "current_achievements", None),
+        achievements_total=getattr(achievement, "total_achievements", None),
+        last_played_at=_as_iso(getattr(history, "last_time_played", None)),
+    )
 
 
 def _current_title(item: object) -> tuple[str | None, str | None, str | None]:

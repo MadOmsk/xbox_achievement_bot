@@ -46,6 +46,8 @@ class FakeClient:
         self.everything = everything or []
         self.history = history or []
         self.title_calls: list[tuple[str, str]] = []
+        self.resolved: list[str] = []
+        self.resolvable: dict[str, FakeHistoryEntry] = {}
 
     async def title_achievements(self, tg_id, title_id, platform):
         self.title_calls.append((title_id, platform))
@@ -59,6 +61,10 @@ class FakeClient:
 
     async def gamerscore(self, tg_id):
         return 35776
+
+    async def resolve_title(self, tg_id, title_id):
+        self.resolved.append(title_id)
+        return self.resolvable.get(title_id)
 
 
 class FakePublisher:
@@ -182,3 +188,24 @@ async def test_reminder_respects_the_interval(repo: Repo, cipher) -> None:
     await job.run()  # immediately again — too early
     assert len(bot.sent) == 1
     assert await repo.tokens_needing_reminder(MAX_REMINDERS, REMINDER_INTERVAL_HOURS) == []
+
+
+async def test_title_name_is_resolved_once_when_presence_has_none(repo: Repo, cipher) -> None:
+    """Presence returns an empty name for PC titles; a published message must
+    not say "неизвестная игра" because of it."""
+    await _connected_user(repo, cipher)
+    client = FakeClient(by_title={"85494077": [parsed("a1", title_id="85494077")]})
+    client.resolvable["85494077"] = FakeHistoryEntry(
+        "85494077", "Microsoft Solitaire Collection", "modern"
+    )
+    publisher = FakePublisher()
+    fetcher = Fetcher(repo, client, publisher)  # type: ignore[arg-type]
+
+    await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "85494077", "modern", None)
+    assert client.resolved == ["85494077"]
+    assert await repo.title_name("85494077") == "Microsoft Solitaire Collection"
+
+    # Second time the name comes from the cache, not from Xbox Live.
+    client.by_title["85494077"].append(parsed("a2", title_id="85494077"))
+    await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "85494077", "modern", None)
+    assert client.resolved == ["85494077"]
