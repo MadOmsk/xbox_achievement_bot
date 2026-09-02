@@ -10,12 +10,20 @@ from aiogram.client.default import DefaultBotProperties
 
 from bot.config import Settings, get_settings
 from bot.db.repo import Database, Repo
+from bot.handlers import chat as chat_handlers
 from bot.handlers import connect as connect_handlers
 from bot.handlers import panel as panel_handlers
+from bot.handlers.chat import UsernameMiddleware
 from bot.handlers.keyboards import timezone_keyboard
+from bot.poller.fetcher import Fetcher
+from bot.poller.presence import PresencePoller
+from bot.poller.publisher import Publisher
+from bot.poller.reminders import ReminderJob
+from bot.poller.scheduler import PollerScheduler
 from bot.services.connect import ConnectService
 from bot.services.crypto import TokenCipher
 from bot.services.xbox.auth import XboxAuthService, XboxIdentity
+from bot.services.xbox.client import XboxClient
 from bot.web.oauth import OAuthServer
 
 log = logging.getLogger(__name__)
@@ -48,6 +56,31 @@ async def run(settings: Settings) -> None:
         default=DefaultBotProperties(link_preview_is_disabled=True),
     )
 
+    client = XboxClient(auth)
+    publisher = Publisher(bot, repo)
+    fetcher = Fetcher(repo, client, publisher, settings.backfill_concurrency)
+    poller = PresencePoller(settings, repo, client, fetcher)
+    scheduler = PollerScheduler(poller, fetcher, ReminderJob(bot, repo), repo)
+
+    async def backfill(tg_id: int, xuid: str) -> None:
+        """Runs in the background: five people connecting one evening must not
+        block the poller (SPEC 5.6)."""
+        try:
+            count = await fetcher.backfill(tg_id, xuid)
+        except Exception:
+            log.exception("backfill for tg_id=%s failed", tg_id)
+            await bot.send_message(
+                tg_id,
+                "Не смог перечитать твою историю ачивок. Публикация пока выключена, "
+                "чтобы не завалить чат — напиши /connect ещё раз чуть позже.",
+            )
+            return
+        await bot.send_message(
+            tg_id,
+            f"Готово: перечитал {count} уже выбитых ачивок — в чат они не полетят. "
+            "Дальше публикую только новые.",
+        )
+
     async def on_linked(tg_id: int, identity: XboxIdentity) -> None:
         """Runs in the web callback, right after the account is stored."""
         await bot.send_message(tg_id, f"✅ Подключил Xbox: {identity.gamertag}")
@@ -56,6 +89,9 @@ async def run(settings: Settings) -> None:
             await bot.send_message(
                 tg_id, connect_handlers.TIMEZONE_PROMPT, reply_markup=timezone_keyboard()
             )
+        if not await repo.has_any_achievements(identity.xuid):
+            await bot.send_message(tg_id, "Читаю твою историю ачивок, это займёт минуту…")
+            asyncio.create_task(backfill(tg_id, identity.xuid))  # noqa: RUF006
 
     web_server = OAuthServer(settings, connect_service, on_linked)
     await web_server.start()
@@ -63,14 +99,21 @@ async def run(settings: Settings) -> None:
     dispatcher = Dispatcher()
     dispatcher["repo"] = repo
     dispatcher["connect"] = connect_service
+    dispatcher.message.outer_middleware(UsernameMiddleware(repo))
     dispatcher.include_router(connect_handlers.router)
     dispatcher.include_router(panel_handlers.router)
+    dispatcher.include_router(chat_handlers.router)
+
+    await publisher.start()
+    scheduler.start()
 
     me = await bot.me()
     log.info("bot @%s is up", me.username)
     try:
         await dispatcher.start_polling(bot, handle_signals=False)
     finally:
+        scheduler.shutdown()
+        await publisher.stop()
         await web_server.stop()
         await auth.close()
         await bot.session.close()

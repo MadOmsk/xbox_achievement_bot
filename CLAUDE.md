@@ -27,17 +27,20 @@ APScheduler, pydantic v2, cryptography (Fernet). Форматирование и
 bot/
   main.py            точка входа, сборка приложения
   config.py          настройки из окружения (pydantic-settings)
+  util.py            мелкие общие помощники (время UTC, маскирование секретов)
   handlers/          роутеры aiogram, только UI-слой
     connect.py       /start, /connect, /disconnect
     panel.py         панель пользователя
     admin.py         админ-панель
     chat.py          /subscribe, /stats, /compare, /top, /recent
+    keyboards.py     инлайн-клавиатуры, общие для панелей и онбординга
   services/
     xbox/
       auth.py        обёртка над xbox-webapi-python: хранение и обновление токенов
       client.py      запросы к Xbox Live, лимитер, retry, backoff
       models.py      pydantic-модели ответов (в т.ч. контракт 4 с редкостью)
-    achievements.py  дедуп, фильтрация, формирование сообщений
+    achievements.py  фильтрация и формирование сообщений
+    connect.py       одноразовый state для OAuth, завершение входа
     stats.py         агрегаты для панелей, /stats, /compare, /top, итога дня
     settings.py      глобальные настройки, настройки юзера и чата
     crypto.py        шифрование токенов
@@ -47,6 +50,7 @@ bot/
     fetcher.py       шаг 2: ачивки по игре, история игр
     publisher.py     шаг 3: публикация, дайджест, очередь Telegram
     daily.py         ежедневный итог
+    reminders.py     напоминания о протухшем входе (SPEC 5.1.1)
   web/
     oauth.py         aiohttp-колбэк Microsoft
   db/

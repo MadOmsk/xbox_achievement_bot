@@ -121,6 +121,31 @@ async def disconnect_confirm(callback: CallbackQuery, repo: Repo) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "relogin")
+async def relogin(callback: CallbackQuery, connect: ConnectService) -> None:
+    """Button from the "access expired" reminder (SPEC 5.1.1)."""
+    url = connect.start_login(callback.from_user.id)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            "Войди заново — старые ачивки в чат не полетят, они уже отмечены как виденные.",
+            reply_markup=connect_keyboard(url),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "optout")
+async def optout(callback: CallbackQuery, repo: Repo) -> None:
+    """Left on purpose: subscriptions go, history stays, reminders stop."""
+    await repo.set_token_status(callback.from_user.id, "revoked")
+    await repo.delete_subscriptions_of_user(callback.from_user.id)
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            "Хорошо, больше не напоминаю. Историю ачивок сохранил — "
+            "вернуться можно в любой момент через /connect."
+        )
+    await callback.answer()
+
+
 @router.callback_query(F.data == TZ_MORE)
 async def timezone_full_list(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
