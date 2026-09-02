@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from bot.db.repo import AchievementRow, ChatTarget, UserSettings
-from bot.services.achievements import format_digest, format_single, passes_filters
+from bot.services.achievements import (
+    format_digest,
+    format_single,
+    passes_filters,
+    platform_note,
+)
 
 
 def achievement(
@@ -97,3 +102,11 @@ def test_digest_counts_and_trims() -> None:
     text = format_digest("Igor", "Halo Infinite", items)
     assert "5 ачивок за сессию (+100 G)" in text
     assert "… и ещё 2" in text
+
+
+def test_platform_note_keys_on_platform_not_missing_rarity() -> None:
+    """Backfilled rows come from contract 2, which carries no rarity — a modern
+    game must not be labelled "Xbox 360" because of that."""
+    assert platform_note("x360", None) == " · Xbox 360"
+    assert platform_note("modern", 2.4) == " · 2.4%"
+    assert platform_note("modern", None) == ""

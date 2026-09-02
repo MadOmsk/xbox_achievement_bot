@@ -138,3 +138,12 @@ CREATE TABLE IF NOT EXISTS titles (
     platform   TEXT,               -- x360 / modern
     updated_at TEXT NOT NULL
 );
+
+-- Which chats already got their summary for a given day: the job wakes up every
+-- minute, and without this a restart at the wrong moment would send it twice.
+CREATE TABLE IF NOT EXISTS daily_reports (
+    chat_id     INTEGER NOT NULL,
+    report_date TEXT NOT NULL,   -- local date of the chat's timezone
+    sent_at     TEXT NOT NULL,
+    PRIMARY KEY (chat_id, report_date)
+);

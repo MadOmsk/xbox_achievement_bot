@@ -13,6 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from bot.db.repo import Repo
+from bot.poller.daily import DailySummary
 from bot.poller.fetcher import Fetcher
 from bot.poller.presence import PresencePoller
 from bot.poller.reminders import ReminderJob
@@ -28,11 +29,13 @@ class PollerScheduler:
         poller: PresencePoller,
         fetcher: Fetcher,
         reminders: ReminderJob,
+        daily: DailySummary,
         repo: Repo,
     ) -> None:
         self._poller = poller
         self._fetcher = fetcher
         self._reminders = reminders
+        self._daily = daily
         self._repo = repo
         self._scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -55,6 +58,15 @@ class PollerScheduler:
             self._reminders.run,
             IntervalTrigger(hours=6),
             id="reminders",
+            coalesce=True,
+            max_instances=1,
+        )
+        # Every minute, because the hour is a runtime setting: a cron trigger
+        # would have to be rebuilt whenever the admin changes it (SPEC 5.7).
+        self._scheduler.add_job(
+            self._daily.tick,
+            IntervalTrigger(seconds=TICK_SECONDS),
+            id="daily_summary",
             coalesce=True,
             max_instances=1,
         )

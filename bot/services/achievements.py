@@ -58,6 +58,20 @@ def _passes_rarity(achievement: AchievementRow, mode: str, threshold: float) -> 
     return achievement.rarity_percent <= threshold
 
 
+def platform_note(platform: str, rarity_percent: float | None) -> str:
+    """The trailing " · 2.4%" of a line.
+
+    Keyed on the platform, not on a missing rarity: backfilled rows come from
+    contract 2, which carries no rarity at all, and a modern game must not be
+    labelled "Xbox 360" because of that.
+    """
+    if platform == "x360":
+        return " · Xbox 360"
+    if rarity_percent is None:
+        return ""
+    return f" · {rarity_percent:g}%"
+
+
 def format_single(gamertag: str, achievement: AchievementRow, title_name: str | None) -> str:
     title = title_name or achievement.title_name or "неизвестная игра"
     parts = [title, f"{achievement.gamerscore} G"]
@@ -86,11 +100,7 @@ def format_digest(gamertag: str, title_name: str | None, achievements: list[Achi
     lines = [header, ""]
     for achievement in achievements[:DIGEST_PREVIEW]:
         badge = rarity_badge(achievement.rarity_percent) or "·"
-        tail = (
-            f" · {achievement.rarity_percent:g}%"
-            if achievement.rarity_percent is not None
-            else " · Xbox 360"
-        )
+        tail = platform_note(achievement.platform, achievement.rarity_percent)
         lines.append(f"{badge} {achievement.name} · {achievement.gamerscore} G{tail}")
 
     remaining = len(achievements) - DIGEST_PREVIEW

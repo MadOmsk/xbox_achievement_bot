@@ -125,6 +125,35 @@ class PresenceRow:
 
 
 @dataclass(slots=True)
+class ChatMemberStat:
+    tg_id: int
+    gamertag: str | None
+    xuid: str
+    count: int
+    score: int
+    rare: int
+
+
+@dataclass(slots=True)
+class RecentAchievement:
+    gamertag: str | None
+    name: str
+    game: str | None
+    gamerscore: int
+    rarity_percent: float | None
+    platform: str
+    unlocked_at: str | None
+
+
+@dataclass(slots=True)
+class TopGame:
+    name: str | None
+    gamerscore: int | None
+    unlocked: int | None
+    total: int | None
+
+
+@dataclass(slots=True)
 class TitleHistoryRow:
     title_id: str
     name: str
@@ -706,6 +735,114 @@ class Repo:
                 (_iso(since),),
             )
         return {row[0]: (int(row[1]), int(row[2])) for row in await cursor.fetchall()}
+
+    # ------------------------------------------------------------ chat stats
+
+    async def chat_member_stats(
+        self,
+        chat_id: int,
+        since: datetime,
+        rare_threshold: float,
+        until: datetime | None = None,
+    ) -> list[ChatMemberStat]:
+        """Per-person totals for a chat over a period.
+
+        Excluded users drop out here; everything else counts, including rows
+        the feed filtered out — the summary is a report, not the feed (SPEC 7.3).
+        """
+        params: list[object] = [rare_threshold, chat_id, _iso(since)]
+        bound = ""
+        if until is not None:
+            bound = " AND s.unlocked_at < ?"
+            params.append(_iso(until))
+
+        cursor = await self._conn.execute(
+            "SELECT u.tg_id, u.gamertag, u.xuid, COUNT(*) AS cnt,"
+            "       COALESCE(SUM(s.gamerscore), 0) AS score,"
+            "       SUM(CASE WHEN s.rarity_percent IS NOT NULL AND s.rarity_percent <= ?"
+            "                THEN 1 ELSE 0 END) AS rare "
+            "FROM subscriptions sub "
+            "JOIN users u ON u.tg_id = sub.tg_id "
+            "JOIN seen_achievements s ON s.xuid = u.xuid "
+            "WHERE sub.chat_id = ? AND u.is_excluded = 0 AND s.unlocked_at >= ?" + bound + " "
+            "GROUP BY u.tg_id ORDER BY cnt DESC, score DESC",
+            params,
+        )
+        return [
+            ChatMemberStat(
+                tg_id=row["tg_id"],
+                gamertag=row["gamertag"],
+                xuid=row["xuid"],
+                count=int(row["cnt"]),
+                score=int(row["score"]),
+                rare=int(row["rare"] or 0),
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def chat_recent(self, chat_id: int, limit: int) -> list[RecentAchievement]:
+        cursor = await self._conn.execute(
+            "SELECT u.gamertag, s.name, t.name AS game, s.gamerscore, s.rarity_percent,"
+            "       s.platform, s.unlocked_at "
+            "FROM subscriptions sub "
+            "JOIN users u ON u.tg_id = sub.tg_id "
+            "JOIN seen_achievements s ON s.xuid = u.xuid "
+            "LEFT JOIN titles t ON t.title_id = s.title_id "
+            "WHERE sub.chat_id = ? AND u.is_excluded = 0 AND s.unlocked_at IS NOT NULL "
+            "ORDER BY s.unlocked_at DESC LIMIT ?",
+            (chat_id, limit),
+        )
+        return [
+            RecentAchievement(
+                gamertag=row["gamertag"],
+                name=row["name"],
+                game=row["game"],
+                gamerscore=int(row["gamerscore"] or 0),
+                rarity_percent=row["rarity_percent"],
+                platform=row["platform"],
+                unlocked_at=row["unlocked_at"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def top_games(self, xuid: str, limit: int = 5) -> list[TopGame]:
+        cursor = await self._conn.execute(
+            "SELECT t.name, h.current_gamerscore, h.achievements_unlocked, h.achievements_total "
+            "FROM title_history h LEFT JOIN titles t ON t.title_id = h.title_id "
+            "WHERE h.xuid = ? AND h.current_gamerscore > 0 "
+            "ORDER BY h.current_gamerscore DESC LIMIT ?",
+            (xuid, limit),
+        )
+        return [
+            TopGame(
+                name=row["name"],
+                gamerscore=row["current_gamerscore"],
+                unlocked=row["achievements_unlocked"],
+                total=row["achievements_total"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def find_user_by_username(self, username: str) -> User | None:
+        cursor = await self._conn.execute(
+            "SELECT * FROM users WHERE lower(username) = lower(?)", (username.lstrip("@"),)
+        )
+        row = await cursor.fetchone()
+        return _as_user(row) if row else None
+
+    async def daily_report_sent(self, chat_id: int, report_date: str) -> bool:
+        cursor = await self._conn.execute(
+            "SELECT 1 FROM daily_reports WHERE chat_id = ? AND report_date = ?",
+            (chat_id, report_date),
+        )
+        return await cursor.fetchone() is not None
+
+    async def mark_daily_report_sent(self, chat_id: int, report_date: str) -> None:
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO daily_reports (chat_id, report_date, sent_at) VALUES (?, ?, ?)",
+            (chat_id, report_date, utcnow_iso()),
+        )
+        await self._conn.commit()
 
     # ----------------------------------------------------------------- admin
 
