@@ -94,8 +94,10 @@ def test_x360_has_no_rarity_and_only_unlocked() -> None:
     assert parsed[0].gamerscore == 15
 
 
-def test_seven_digit_fraction_and_zero_date() -> None:
+def test_seven_digit_fraction_and_placeholder_dates() -> None:
     assert parse_timestamp("2025-08-30T09:17:58.7770000Z") is not None
     assert parse_timestamp("0001-01-01T00:00:00.0000000Z") is None
+    # The other Microsoft placeholder; counting it would put unlocks in 1753.
+    assert parse_timestamp("1753-01-01T00:00:00.0000000Z") is None
     assert parse_timestamp(None) is None
     assert parse_timestamp("not a date") is None

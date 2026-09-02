@@ -26,8 +26,11 @@ Platform = Literal["modern", "x360"]
 # datetime.fromisoformat refuses. Cut them down to six.
 _FRACTION = re.compile(r"\.(\d{1,6})\d*")
 
-# The zero date Microsoft uses for "not unlocked".
-_NEVER = datetime(1, 1, 1, tzinfo=UTC)
+# Microsoft has two "no date" markers: the zero date 0001-01-01 and 1753-01-01,
+# the old SQL Server minimum (84 of 5239 rows on a live account). Xbox Live did
+# not exist before 2005, so anything older than that is a placeholder, not a
+# date — statistics must not count it as an unlock in the year 1753.
+_EARLIEST_REAL_UNLOCK = datetime(2005, 1, 1, tzinfo=UTC)
 
 
 @dataclass(slots=True)
@@ -176,7 +179,7 @@ def parse_timestamp(value: str | None) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return None if parsed <= _NEVER else parsed
+    return None if parsed < _EARLIEST_REAL_UNLOCK else parsed
 
 
 def parse_achievements(
