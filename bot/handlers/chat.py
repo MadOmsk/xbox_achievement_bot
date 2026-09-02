@@ -6,6 +6,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, F, Router
@@ -39,7 +40,8 @@ from bot.services.stats import (
     local_now,
     month_start_utc,
 )
-from bot.util import cooldown_minutes_left, humanize_ago, thousands
+from bot.services.tables import GREEN, render_table, total_line
+from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +53,8 @@ GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 # whole chat spam it in turns.
 SUMMARY_COOLDOWN_SECONDS = 600
 _last_summary: dict[int, float] = {}
+
+RECENT_GAMES_DAYS = 30
 
 
 class UsernameMiddleware(BaseMiddleware):
@@ -133,28 +137,35 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
         repo, target.xuid, settings_row.tz_offset_min if settings_row else None
     )
     lines = [
-        f"📊 {target.gamertag or 'без геймертега'}  ·  "
+        f"{GREEN} <b>{target.gamertag or 'без геймертега'}</b>  ·  "
         f"gamerscore {thousands(target.gamerscore or 0)}",
         "",
         f"Сегодня:   {plural_achievements(counters.today)} (+{counters.today_score} G)",
         f"За месяц:  {plural_achievements(counters.month)} (+{thousands(counters.month_score)} G)",
-        f"Всего:     {plural_achievements(counters.total)}",
+        total_line("Всего", plural_achievements(counters.total)),
     ]
 
-    games = await repo.top_games(target.xuid)
+    games = await repo.recent_games(target.xuid, utcnow() - timedelta(days=RECENT_GAMES_DAYS))
     if games:
-        lines += ["", "Больше всего очков:"]
-        for place, game in enumerate(games, start=1):
-            progress = (
-                f" ({game.unlocked}/{game.total})"
-                if game.unlocked is not None and game.total
-                else ""
-            )
-            lines.append(
-                f"{place}. {game.name or 'без названия'} — "
-                f"{thousands(game.gamerscore or 0)} G{progress}"
-            )
-    await message.answer("\n".join(lines))
+        lines += [
+            "",
+            f"{GREEN} <b>Игры за {RECENT_GAMES_DAYS} дней</b>",
+            "",
+            render_table(
+                ["#", "Игра", "Ач.", "+G"],
+                [
+                    [
+                        str(place),
+                        game.name or "без названия",
+                        str(game.unlocked or 0),
+                        f"+{thousands(game.gamerscore or 0)}",
+                    ]
+                    for place, game in enumerate(games, start=1)
+                ],
+                ["<", "<", ">", ">"],
+            ),
+        ]
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("compare"))
@@ -199,44 +210,63 @@ async def top(message: Message, repo: Repo) -> None:
     offset = await global_offset_minutes(repo)
     threshold = float(await repo.get_app_setting("rare_threshold_percent", "10") or 10)
     rows = await repo.chat_member_stats(message.chat.id, month_start_utc(offset), threshold)
-    if not rows:
+    # chat_member_stats now lists every subscriber, zero-scorers included, so
+    # "nobody has anything" has to check the counts, not just row presence.
+    if not rows or not any(row.count for row in rows):
         await message.answer("За этот месяц пока никто ничего не выбил.")
         return
 
-    lines = ["🏆 За месяц", ""]
-    for place, row in enumerate(rows[:TOP_LIMIT], start=1):
-        rare = f"  💎 {row.rare}" if row.rare else ""
-        lines.append(
-            f"{place}. {row.gamertag or row.tg_id}  {row.count}  +{thousands(row.score)} G{rare}"
-        )
-    await message.answer("\n".join(lines))
+    table = render_table(
+        ["#", "Игрок", "Ач.", "+G", "💎"],
+        [
+            [
+                str(place),
+                row.gamertag or f"id{row.tg_id}",
+                str(row.count),
+                f"+{thousands(row.score)}",
+                str(row.rare) if row.rare else "",
+            ]
+            for place, row in enumerate(rows[:TOP_LIMIT], start=1)
+        ],
+        ["<", "<", ">", ">", ">"],
+    )
+    await message.answer(f"{GREEN} <b>За месяц</b>\n\n{table}", parse_mode=ParseMode.HTML)
+
+
+async def _summary_or_cooldown(repo: Repo, chat_id: int) -> tuple[str | None, int]:
+    """The report itself, or how many minutes are left before it can be asked
+    for again. Shared by /summary and the hub button (SPEC 5.7, 6.3) — one
+    cooldown clock and one set of numbers no matter how it was triggered.
+
+    Rate-limited per chat rather than per person: limiting only the requester
+    would still let the whole chat spam it by taking turns.
+    """
+    minutes_left = cooldown_minutes_left(
+        _last_summary.get(chat_id), time.monotonic(), SUMMARY_COOLDOWN_SECONDS
+    )
+    if minutes_left:
+        return None, minutes_left
+
+    # The cooldown covers "nothing new" too — that answer is still a message,
+    # and without this it could be spammed just as freely as a real summary.
+    _last_summary[chat_id] = time.monotonic()
+    offset = await global_offset_minutes(repo)
+    threshold = await current_rare_threshold(repo)
+    text = await build_summary(repo, chat_id, threshold, local_now(offset).date())
+    return text, 0
 
 
 @router.message(Command("summary"))
 async def summary_command(message: Message, repo: Repo) -> None:
-    """The same report the 23:00 job sends, on demand (SPEC 5.7, 6.3).
-
-    Rate-limited per chat rather than per person: limiting only the requester
-    would still let the whole chat spam it in turns, one person at a time.
-    """
+    """The same report the 23:00 job sends, on demand."""
     if message.chat.type not in GROUP_TYPES:
         await message.answer("Сводка считается по чату — набери команду в группе.")
         return
 
-    minutes_left = cooldown_minutes_left(
-        _last_summary.get(message.chat.id), time.monotonic(), SUMMARY_COOLDOWN_SECONDS
-    )
+    text, minutes_left = await _summary_or_cooldown(repo, message.chat.id)
     if minutes_left:
         await message.answer(f"Сводку уже присылали недавно. Ещё раз — через {minutes_left} мин.")
         return
-
-    # The cooldown covers "nothing new" too — that answer is still a message,
-    # and without this it could be spammed just as freely as a real summary.
-    _last_summary[message.chat.id] = time.monotonic()
-
-    offset = await global_offset_minutes(repo)
-    threshold = await current_rare_threshold(repo)
-    text = await build_summary(repo, message.chat.id, offset, threshold, local_now(offset).date())
     if text is None:
         await message.answer("За последние сутки в чате пока никто ничего не выбил.")
         return
@@ -319,6 +349,7 @@ def hub_keyboard(bot_username: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="✅ Публиковать мои", callback_data="sub:on"),
                 InlineKeyboardButton(text="🚫 Не публиковать", callback_data="sub:off"),
             ],
+            [InlineKeyboardButton(text="📊 Сводка за сутки", callback_data="hub:summary")],
             [
                 InlineKeyboardButton(
                     text="🔗 Подключить Xbox",
@@ -363,6 +394,21 @@ async def greet_new_chat(event: ChatMemberUpdated, repo: Repo, bot: Bot) -> None
         await hub_text(repo, event.chat.id),
         reply_markup=hub_keyboard(me.username or ""),
     )
+
+
+@router.callback_query(F.data == "hub:summary")
+async def hub_summary_button(callback: CallbackQuery, repo: Repo) -> None:
+    if not isinstance(callback.message, Message):
+        return
+    text, minutes_left = await _summary_or_cooldown(repo, callback.message.chat.id)
+    if minutes_left:
+        await callback.answer(f"Уже присылали недавно. Ещё раз — через {minutes_left} мин.")
+        return
+    await callback.answer()
+    if text is None:
+        await callback.message.answer("За последние сутки в чате пока никто ничего не выбил.")
+        return
+    await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "sub:on")

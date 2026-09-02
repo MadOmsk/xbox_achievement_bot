@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from html import escape as html_escape
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -17,13 +16,18 @@ from aiogram.exceptions import TelegramForbiddenError
 
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
-from bot.services.stats import global_offset_minutes, local_now, month_start_utc
+from bot.services.stats import global_offset_minutes, local_now
+from bot.services.tables import GREEN, render_table, total_line
 from bot.util import thousands, utcnow
 
 log = logging.getLogger(__name__)
 
-MONTH_TOP = 10
 DAY_WINDOW_HOURS = 24
+# Rolling, like the day window — not the calendar month. Same reasoning: a
+# calendar boundary would cut the window at an arbitrary moment and give every
+# member a different "this month" depending on when they check.
+MONTH_WINDOW_DAYS = 30
+TABLE_TOP = 15
 MONTHS = (
     "января",
     "февраля",
@@ -38,10 +42,6 @@ MONTHS = (
     "ноября",
     "декабря",
 )
-
-# Xbox gamertags run up to 15 characters (the unique-suffix form a bit more);
-# truncating keeps every row on one line even in a narrow mobile view.
-NAME_WIDTH = 15
 
 
 class DailySummary:
@@ -65,9 +65,7 @@ class DailySummary:
             if await self._repo.daily_report_sent(chat.chat_id, report_date):
                 continue
 
-            text = await build_summary(
-                self._repo, chat.chat_id, offset, threshold, now_local.date()
-            )
+            text = await build_summary(self._repo, chat.chat_id, threshold, now_local.date())
             if text is None:
                 # Nobody unlocked anything: staying silent keeps the summary
                 # meaningful instead of turning it into daily noise (SPEC 5.7).
@@ -94,66 +92,53 @@ async def current_rare_threshold(repo: Repo) -> float:
         return 10.0
 
 
-async def build_summary(
-    repo: Repo, chat_id: int, offset: int, threshold: float, today: date
-) -> str | None:
-    """The same rolling-24h report used by the scheduled job and by /summary
+async def build_summary(repo: Repo, chat_id: int, threshold: float, today: date) -> str | None:
+    """The same two-window report used by the scheduled job and by /summary
     on demand — one implementation, one set of numbers (SPEC 5.7, 6.3).
 
-    Rendered as an HTML <pre> block: Telegram's monospace font is the only way
-    to get columns that actually line up, so the numbers read as a table
-    instead of a run-on sentence of digits.
+    Both windows are rolling, not calendar-bound — a calendar day or month
+    would cut off at an arbitrary moment and give every member a different
+    "today" depending on when they happen to check (SPEC 5.7) — and both list
+    everyone subscribed, zero-scorers included, so the table reads as a
+    roster, not just whoever happened to unlock something.
     """
-    # A rolling 24 hours, not the calendar day. The scheduled summary goes out
-    # at 23:00, so a calendar window would leave 23:00–00:00 in no report at
-    # all — every day quietly lost its last hour. It also sidesteps the
-    # timezone question, since members live in different ones.
+    now = utcnow()
     day_rows = await repo.chat_member_stats(
-        chat_id, utcnow() - timedelta(hours=DAY_WINDOW_HOURS), threshold
+        chat_id, now - timedelta(hours=DAY_WINDOW_HOURS), threshold
     )
-    if not day_rows:
+    if not day_rows or not any(row.count for row in day_rows):
         return None
 
-    total = sum(row.count for row in day_rows)
-    score = sum(row.score for row in day_rows)
+    month_rows = await repo.chat_member_stats(
+        chat_id, now - timedelta(days=MONTH_WINDOW_DAYS), threshold
+    )
 
     lines = [
-        f"📊 <b>Итоги за сутки</b>, {today.day} {MONTHS[today.month - 1]}",
+        f"{GREEN} <b>24 часа</b>, {today.day} {MONTHS[today.month - 1]}",
         "",
-        _table(day_rows, ranked=False),
-        f"Всего за сутки: {plural_achievements(total)}, +{thousands(score)} G",
+        *_section(day_rows),
     ]
-
-    month_rows = await repo.chat_member_stats(chat_id, month_start_utc(offset), threshold)
     if month_rows:
-        lines += ["", "<b>За месяц:</b>", _table(month_rows[:MONTH_TOP], ranked=True)]
+        lines += ["", f"{GREEN} <b>30 дней</b>", "", *_section(month_rows)]
     return "\n".join(lines)
 
 
-def _table(rows: list[ChatMemberStat], *, ranked: bool) -> str:
-    """A monospace column block: player, achievement count, gamerscore, and a
-    diamond count for rare ones (SPEC 7.3)."""
-    header = (
-        f"{'#':>2} {'Игрок':<{NAME_WIDTH}} {'Ач.':>4} {'+G':>9}"
-        if ranked
-        else f"{'Игрок':<{NAME_WIDTH}} {'Ач.':>4} {'+G':>9}  💎"
+def _section(rows: list[ChatMemberStat]) -> list[str]:
+    total = sum(row.count for row in rows)
+    score = sum(row.score for row in rows)
+    table = render_table(
+        ["#", "Игрок", "Ач.", "+G", "💎"],
+        [_table_row(place, row) for place, row in enumerate(rows[:TABLE_TOP], start=1)],
+        ["<", "<", ">", ">", ">"],
     )
-    body = [_table_row(row, place if ranked else None) for place, row in enumerate(rows, start=1)]
-    return "<pre>" + "\n".join([header, *body]) + "</pre>"
+    return [table, total_line("Всего", f"{plural_achievements(total)}, +{thousands(score)} G")]
 
 
-def _table_row(row: ChatMemberStat, place: int | None) -> str:
-    name = html_escape(_name(row)[:NAME_WIDTH].ljust(NAME_WIDTH))
-    count = str(row.count).rjust(4)
-    score = f"+{thousands(row.score)}".rjust(9)
-    if place is not None:
-        return f"{place:>2} {name} {count} {score}"
-    # The diamond count counts rare ones by the current threshold; the
-    # summary includes achievements the feed filtered out — it is a report,
-    # not the feed (SPEC 7.3).
-    rare = f"  💎{row.rare}" if row.rare else ""
-    return f"{name} {count} {score}{rare}"
-
-
-def _name(row: ChatMemberStat) -> str:
-    return row.gamertag or f"id{row.tg_id}"
+def _table_row(place: int, row: ChatMemberStat) -> list[str]:
+    return [
+        str(place),
+        row.gamertag or f"id{row.tg_id}",
+        str(row.count),
+        f"+{thousands(row.score)}",
+        str(row.rare) if row.rare else "",
+    ]

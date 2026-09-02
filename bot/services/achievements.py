@@ -34,7 +34,14 @@ def passes_filters(
     The chat protects itself from spam, the person protects himself from his
     own noise, and neither can loosen what the other tightened.
     """
-    if achievement.platform == "x360" and not user.show_x360:
+    if achievement.platform == "x360":
+        # Xbox 360 has no rarity data at all — visibility is decided solely by
+        # the show_x360 switch, never by the rarity filter below (SPEC 5.5).
+        return user.show_x360
+
+    if user.rarity_mode == "hidden":
+        # The One/Series/PC counterpart of show_x360=0: the modern feed off
+        # entirely, independent of the chat's own rarity setting.
         return False
 
     if not _passes_rarity(achievement, user.rarity_mode, rare_threshold):
@@ -52,9 +59,7 @@ def _passes_rarity(achievement: AchievementRow, mode: str, threshold: float) -> 
     if mode != "rare":
         return True
     if achievement.rarity_percent is None:
-        # Xbox 360 has no rarity at all. Unknown is not "too common", so the
-        # x360 switch decides its visibility, not this filter (SPEC 5.5).
-        return achievement.platform == "x360"
+        return False
     return achievement.rarity_percent <= threshold
 
 

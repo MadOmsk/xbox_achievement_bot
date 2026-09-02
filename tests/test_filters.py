@@ -73,6 +73,22 @@ def test_x360_switch_off_hides_it_regardless_of_rarity_mode() -> None:
     assert passes_filters(item, user("all", show_x360=False), chat(), 10.0) is False
 
 
+def test_hidden_mode_hides_modern_achievements_entirely() -> None:
+    """The One/Series/PC counterpart of show_x360=0 — the modern feed off,
+    independent of what the chat's own rarity setting allows."""
+    item = achievement(rarity=30.0)
+    assert passes_filters(item, user("hidden"), chat("all"), 10.0) is False
+    assert passes_filters(item, user("hidden"), chat("rare"), 10.0) is False
+
+
+def test_hidden_mode_does_not_touch_x360() -> None:
+    """A modern-only switch must not silence Xbox 360, which has its own
+    show_x360 toggle (SPEC 5.5)."""
+    item = achievement(rarity=None, platform="x360")
+    assert passes_filters(item, user("hidden", show_x360=True), chat(), 10.0) is True
+    assert passes_filters(item, user("hidden", show_x360=False), chat(), 10.0) is False
+
+
 def test_chat_and_user_settings_are_combined_with_and() -> None:
     item = achievement(rarity=30.0)
     assert passes_filters(item, user("all"), chat("rare"), 10.0) is False

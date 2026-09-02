@@ -20,6 +20,7 @@ from bot.handlers.keyboards import (
     digest_keyboard,
     format_offset,
     panel_keyboard,
+    rarity_keyboard,
     timezone_keyboard,
 )
 from bot.poller.fetcher import Fetcher
@@ -121,14 +122,27 @@ async def panel_sync(
 
 
 @router.callback_query(F.data == "panel:rarity")
-async def panel_rarity(callback: CallbackQuery, repo: Repo) -> None:
-    """Two modes, not a number: the threshold itself belongs to the admin
-    (SPEC 1.4)."""
+async def panel_rarity_menu(callback: CallbackQuery, repo: Repo) -> None:
+    """Three modes for One/Series/PC, mirroring the show/hide switch below it
+    for Xbox 360 — the threshold itself stays the admin's (SPEC 1.4)."""
     settings_row = await repo.get_user_settings(callback.from_user.id)
     current = settings_row.rarity_mode if settings_row else "all"
-    await repo.update_user_settings(
-        callback.from_user.id, rarity_mode="rare" if current == "all" else "all"
-    )
+    threshold = await repo.get_app_setting("rare_threshold_percent", "10")
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(
+                "One/Series/PC — что показывать в чате",
+                reply_markup=rarity_keyboard(current, threshold or "10"),
+            )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel:rarity:"))
+async def panel_rarity_set(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    mode = callback.data.rsplit(":", 1)[1]
+    await repo.update_user_settings(callback.from_user.id, rarity_mode=mode)
+    await callback.answer()
     await _redraw(callback, repo)
 
 

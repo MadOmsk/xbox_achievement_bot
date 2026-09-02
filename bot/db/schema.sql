@@ -51,8 +51,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 CREATE TABLE IF NOT EXISTS user_settings (
     tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
+    -- 'hidden' is the One/Series/PC counterpart of show_x360: the modern
+    -- achievement feed off entirely, not just filtered to the rare ones.
     rarity_mode      TEXT    NOT NULL DEFAULT 'all'
-                     CHECK (rarity_mode IN ('all', 'rare')),
+                     CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
     show_x360        INTEGER NOT NULL DEFAULT 1,
     digest_threshold INTEGER NOT NULL DEFAULT 3,
     muted_title_ids  TEXT    NOT NULL DEFAULT '[]',

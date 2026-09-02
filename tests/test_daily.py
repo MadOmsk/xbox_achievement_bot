@@ -61,14 +61,25 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
         XUID_B, [achievement("b1", now, 20, rarity=None)], is_backfill=True
     )
 
-    text = await build_summary(repo, CHAT_ID, 0, 10.0, now.date())
+    text = await build_summary(repo, CHAT_ID, 10.0, now.date())
 
     assert text is not None
     assert "Igor" in text and "Alex" in text
-    assert "💎1" in text  # only the 2.4% one is rare at a 10% threshold
-    assert "Всего за сутки: 3 ачивки, +110 G" in text
-    assert "За месяц" in text
+    assert "24 часа" in text and "30 дней" in text  # not the same label twice
     assert "<pre>" in text and "</pre>" in text  # a monospace table, not prose
+    assert text.count("Всего") == 2  # one total per window
+
+
+async def test_zero_scorers_still_appear(repo: Repo) -> None:
+    """A subscriber with nothing unlocked used to vanish from the table
+    entirely — the roster should show him at zero, not hide him."""
+    await _chat_with_two_players(repo)
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
+
+    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+
+    assert text is not None
+    assert "Alex" in text  # unlocked nothing, still listed
 
 
 async def test_gamertag_is_escaped_inside_the_html_table(repo: Repo) -> None:
@@ -80,7 +91,7 @@ async def test_gamertag_is_escaped_inside_the_html_table(repo: Repo) -> None:
     await repo.subscribe(CHAT_ID, 1)
     await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
 
-    text = await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date())
+    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
 
     assert text is not None
     assert "<C>" not in text  # would be parsed as a (bogus) HTML tag
@@ -90,7 +101,7 @@ async def test_gamertag_is_escaped_inside_the_html_table(repo: Repo) -> None:
 async def test_silent_when_nobody_unlocked_anything(repo: Repo) -> None:
     """Otherwise the summary becomes daily noise (SPEC 5.7)."""
     await _chat_with_two_players(repo)
-    assert await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date()) is None
+    assert await build_summary(repo, CHAT_ID, 10.0, utcnow().date()) is None
 
 
 async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
@@ -100,7 +111,7 @@ async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
     await repo.insert_new_achievements(
         XUID_A, [achievement("too-old", utcnow() - timedelta(hours=25))], is_backfill=False
     )
-    assert await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date()) is None
+    assert await build_summary(repo, CHAT_ID, 10.0, utcnow().date()) is None
 
     # 23 hours ago is still inside the window, even though it is another
     # calendar day for someone.
@@ -109,8 +120,26 @@ async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
         [achievement("late-yesterday", utcnow() - timedelta(hours=23))],
         is_backfill=False,
     )
-    text = await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date())
+    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
     assert text is not None and "Igor" in text
+
+
+async def test_month_window_is_thirty_rolling_days(repo: Repo) -> None:
+    """ "30 дней" means exactly that, not the calendar month-to-date."""
+    await _chat_with_two_players(repo)
+    await repo.insert_new_achievements(XUID_A, [achievement("today", utcnow())], is_backfill=False)
+    await repo.insert_new_achievements(
+        XUID_A,
+        [achievement("old", utcnow() - timedelta(days=40))],
+        is_backfill=False,
+    )
+
+    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+
+    assert text is not None
+    # Two total achievements (today + old) must not both land in the 30-day
+    # section; only the recent one should count there.
+    assert "2 ачивки" not in text
 
 
 async def test_summary_is_sent_once_per_day(repo: Repo) -> None:

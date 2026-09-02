@@ -747,26 +747,29 @@ class Repo:
     ) -> list[ChatMemberStat]:
         """Per-person totals for a chat over a period.
 
-        Excluded users drop out here; everything else counts, including rows
-        the feed filtered out — the summary is a report, not the feed (SPEC 7.3).
+        Excluded users drop out here; everyone else appears even with a zero,
+        including rows the feed filtered out — the summary is a report, not
+        the feed (SPEC 7.3). The date filter lives in the JOIN, not WHERE: a
+        WHERE on the right-hand table turns a LEFT JOIN back into an INNER
+        JOIN, which is exactly the bug that used to hide zero-scorers.
         """
-        params: list[object] = [rare_threshold, chat_id, _iso(since)]
-        bound = ""
+        date_bound = "AND s.unlocked_at >= ?"
+        date_params: list[object] = [_iso(since)]
         if until is not None:
-            bound = " AND s.unlocked_at < ?"
-            params.append(_iso(until))
+            date_bound += " AND s.unlocked_at < ?"
+            date_params.append(_iso(until))
 
         cursor = await self._conn.execute(
-            "SELECT u.tg_id, u.gamertag, u.xuid, COUNT(*) AS cnt,"
+            "SELECT u.tg_id, u.gamertag, u.xuid, COUNT(s.achievement_id) AS cnt,"
             "       COALESCE(SUM(s.gamerscore), 0) AS score,"
             "       SUM(CASE WHEN s.rarity_percent IS NOT NULL AND s.rarity_percent <= ?"
             "                THEN 1 ELSE 0 END) AS rare "
             "FROM subscriptions sub "
             "JOIN users u ON u.tg_id = sub.tg_id "
-            "JOIN seen_achievements s ON s.xuid = u.xuid "
-            "WHERE sub.chat_id = ? AND u.is_excluded = 0 AND s.unlocked_at >= ?" + bound + " "
+            "LEFT JOIN seen_achievements s ON s.xuid = u.xuid " + date_bound + " "
+            "WHERE sub.chat_id = ? AND u.is_excluded = 0 "
             "GROUP BY u.tg_id ORDER BY cnt DESC, score DESC",
-            params,
+            [rare_threshold, *date_params, chat_id],
         )
         return [
             ChatMemberStat(
@@ -830,6 +833,22 @@ class Repo:
                 unlocked=row["achievements_unlocked"],
                 total=row["achievements_total"],
             )
+            for row in await cursor.fetchall()
+        ]
+
+    async def recent_games(self, xuid: str, since: datetime, limit: int = 15) -> list[TopGame]:
+        """Games actually played recently, not the biggest lifetime scores —
+        a person's five favourite old games would otherwise crowd out
+        whatever they are playing this month, every time."""
+        cursor = await self._conn.execute(
+            "SELECT t.name, COALESCE(SUM(s.gamerscore), 0) AS score, COUNT(*) AS unlocked "
+            "FROM seen_achievements s LEFT JOIN titles t ON t.title_id = s.title_id "
+            "WHERE s.xuid = ? AND s.unlocked_at >= ? "
+            "GROUP BY s.title_id ORDER BY score DESC LIMIT ?",
+            (xuid, _iso(since), limit),
+        )
+        return [
+            TopGame(name=row["name"], gamerscore=row["score"], unlocked=row["unlocked"], total=None)
             for row in await cursor.fetchall()
         ]
 

@@ -57,8 +57,29 @@ def format_digest(threshold: int) -> str:
     return "никогда" if threshold >= DIGEST_NEVER else f"от {threshold} ачивок"
 
 
+# The One/Series/PC counterpart of the Xbox 360 switch below it: same three
+# choices in spirit — show everything, show only the rare ones, or nothing.
+RARITY_CHOICES = ("all", "rare", "hidden")
+
+
 def format_rarity(mode: str, threshold: str | float) -> str:
-    return "любые" if mode != "rare" else f"только редкие (≤ {threshold}%)"
+    if mode == "hidden":
+        return "не показывать"
+    if mode == "rare":
+        return f"только редкие (≤ {threshold}%)"
+    return "любые"
+
+
+def rarity_keyboard(current: str, threshold: str | float) -> InlineKeyboardMarkup:
+    labels = {"all": "Любые", "rare": f"Только редкие (≤ {threshold}%)", "hidden": "Не показывать"}
+    builder = InlineKeyboardBuilder()
+    for mode in RARITY_CHOICES:
+        mark = "• " if mode == current else ""
+        builder.row(
+            InlineKeyboardButton(text=f"{mark}{labels[mode]}", callback_data=f"panel:rarity:{mode}")
+        )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="panel:refresh"))
+    return builder.as_markup()
 
 
 def panel_keyboard(
@@ -72,7 +93,7 @@ def panel_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Редкость: {format_rarity(rarity_mode, rare_threshold)}",
+                    text=f"One/Series/PC: {format_rarity(rarity_mode, rare_threshold)} ▸",
                     callback_data="panel:rarity",
                 )
             ],
