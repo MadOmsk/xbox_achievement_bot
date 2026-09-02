@@ -21,3 +21,6 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Session logs — kept locally, decisions live in SPEC.md
+history.md
