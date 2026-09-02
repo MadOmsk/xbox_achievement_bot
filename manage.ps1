@@ -122,7 +122,9 @@ function Show-Status {
 
     if (Test-Path $Python) {
         Write-Host ''
-        & $Python (Join-Path $Root 'scripts\db_status.py')
+        # -X utf8: otherwise Python writes in the console codepage and the
+        # Russian summary arrives as mojibake.
+        & $Python -X utf8 (Join-Path $Root 'scripts\db_status.py')
     }
 
     if (Test-Path $LogFile) {
