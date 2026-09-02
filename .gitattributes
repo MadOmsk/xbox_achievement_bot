@@ -1,0 +1,9 @@
+# Normalize line endings: LF in the repo and in the working tree.
+# The bot runs on Linux; CRLF from Windows checkouts breaks shell scripts
+# and makes every diff noisy.
+* text=auto eol=lf
+
+# Binary
+*.db binary
+*.png binary
+*.jpg binary

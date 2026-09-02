@@ -1,0 +1,23 @@
+# Secrets and local state — never commit
+.env
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
