@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiogram import BaseMiddleware, Router
+from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, TelegramObject
+from aiogram.filters import (
+    IS_MEMBER,
+    IS_NOT_MEMBER,
+    ChatMemberUpdatedFilter,
+    Command,
+    CommandObject,
+)
+from aiogram.types import (
+    CallbackQuery,
+    ChatMemberUpdated,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
 
 from bot.db.repo import RecentAchievement, Repo, User
 from bot.services.achievements import (
@@ -237,3 +251,118 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
         return await repo.find_user_by_username(argument.strip())
 
     return await repo.get_user(message.from_user.id) if message.from_user else None
+
+
+HELP_TEXT = (
+    "🎮 Я публикую сюда ачивки Xbox тех, кто подписался.\n\n"
+    "Команды чата:\n"
+    "/subscribe — публиковать мои ачивки здесь\n"
+    "/unsubscribe — перестать\n"
+    "/stats — статистика игрока\n"
+    "/compare @кто — сравнить двоих\n"
+    "/top — таблица за месяц\n"
+    "/recent [N] — последние ачивки чата\n\n"
+    "Настройки — в личке: редкость, Xbox 360, часовой пояс."
+)
+
+
+def hub_keyboard(bot_username: str) -> InlineKeyboardMarkup:
+    """Buttons in a group act on whoever presses them.
+
+    That is why they are allowed here at all: the rule from SPEC 6.3 forbids
+    rendering *someone's settings* where any member could page through them,
+    not a button that subscribes the presser himself.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Публиковать мои", callback_data="sub:on"),
+                InlineKeyboardButton(text="🚫 Не публиковать", callback_data="sub:off"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔗 Подключить Xbox",
+                    url=f"https://t.me/{bot_username}?start=connect",
+                ),
+                InlineKeyboardButton(
+                    text="⚙️ Настройки",
+                    url=f"https://t.me/{bot_username}?start=panel",
+                ),
+            ],
+        ]
+    )
+
+
+async def hub_text(repo: Repo, chat_id: int) -> str:
+    names = await repo.chat_subscriber_names(chat_id)
+    if not names:
+        return HELP_TEXT + "\n\nПока здесь никто не публикуется."
+    return HELP_TEXT + "\n\nПубликуются: " + ", ".join(names)
+
+
+@router.message(Command("help"))
+async def help_command(message: Message, repo: Repo, bot: Bot) -> None:
+    if message.chat.type not in GROUP_TYPES:
+        await message.answer(HELP_TEXT)
+        return
+    me = await bot.me()
+    await message.answer(
+        await hub_text(repo, message.chat.id), reply_markup=hub_keyboard(me.username or "")
+    )
+
+
+@router.my_chat_member(ChatMemberUpdatedFilter(member_status_changed=IS_NOT_MEMBER >> IS_MEMBER))
+async def greet_new_chat(event: ChatMemberUpdated, repo: Repo, bot: Bot) -> None:
+    """Say what to do the moment the bot lands in a group, not later."""
+    if event.chat.type not in GROUP_TYPES:
+        return
+    await repo.upsert_chat(event.chat.id, event.chat.title, event.from_user.id)
+    me = await bot.me()
+    await bot.send_message(
+        event.chat.id,
+        await hub_text(repo, event.chat.id),
+        reply_markup=hub_keyboard(me.username or ""),
+    )
+
+
+@router.callback_query(F.data == "sub:on")
+async def subscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    message = callback.message
+    if not isinstance(message, Message):
+        return
+    user = await repo.get_user(callback.from_user.id)
+    if user is None or not user.xuid:
+        me = await bot.me()
+        await callback.answer(f"Сначала подключи Xbox в личке: @{me.username}", show_alert=True)
+        return
+
+    await repo.upsert_chat(message.chat.id, message.chat.title, callback.from_user.id)
+    if await repo.is_subscribed(message.chat.id, callback.from_user.id):
+        await callback.answer("Ты уже публикуешься здесь.")
+        return
+    await repo.subscribe(message.chat.id, callback.from_user.id)
+    await callback.answer("Готово, твои ачивки будут прилетать сюда.")
+    await _refresh_hub(message, repo, bot)
+
+
+@router.callback_query(F.data == "sub:off")
+async def unsubscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    message = callback.message
+    if not isinstance(message, Message):
+        return
+    if not await repo.is_subscribed(message.chat.id, callback.from_user.id):
+        await callback.answer("Ты здесь и не публиковался.")
+        return
+    await repo.unsubscribe(message.chat.id, callback.from_user.id)
+    await callback.answer("Больше не публикую твои ачивки здесь.")
+    await _refresh_hub(message, repo, bot)
+
+
+async def _refresh_hub(message: Message, repo: Repo, bot: Bot) -> None:
+    me = await bot.me()
+    with contextlib.suppress(Exception):
+        # Telegram refuses an edit that changes nothing — not an error.
+        await message.edit_text(
+            await hub_text(repo, message.chat.id),
+            reply_markup=hub_keyboard(me.username or ""),
+        )

@@ -780,6 +780,16 @@ class Repo:
             for row in await cursor.fetchall()
         ]
 
+    async def chat_subscriber_names(self, chat_id: int) -> list[str]:
+        cursor = await self._conn.execute(
+            "SELECT u.gamertag, u.tg_id FROM subscriptions s "
+            "JOIN users u ON u.tg_id = s.tg_id "
+            "WHERE s.chat_id = ? AND u.is_excluded = 0 "
+            "ORDER BY u.gamertag",
+            (chat_id,),
+        )
+        return [row["gamertag"] or f"id{row['tg_id']}" for row in await cursor.fetchall()]
+
     async def chat_recent(self, chat_id: int, limit: int) -> list[RecentAchievement]:
         cursor = await self._conn.execute(
             "SELECT u.gamertag, s.name, t.name AS game, s.gamerscore, s.rarity_percent,"

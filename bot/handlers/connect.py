@@ -47,11 +47,20 @@ REVOKE_URL = "https://account.live.com/consent/Manage"
 async def start_with_payload(
     message: Message, command: CommandObject, repo: Repo, connect: ConnectService
 ) -> None:
-    """Deep link from a group chat: /panel there sends people here (SPEC 6.3)."""
+    """Deep link from a group chat: its buttons send people here (SPEC 6.3)."""
     await repo.ensure_user(message.chat.id, _username(message))
     if command.args == "panel":
         text, markup = await render_panel(repo, message.chat.id)
         await message.answer(text, reply_markup=markup)
+        return
+    if command.args == "connect":
+        # Straight to the login link: the person pressed «Подключить Xbox» in a
+        # group and does not need the whole greeting again.
+        user = await repo.get_user(message.chat.id)
+        if user is not None and user.xuid:
+            await message.answer("Xbox уже подключён. Настройки — /panel.")
+            return
+        await _send_login_link(message, connect)
         return
     await _greet(message, repo, connect)
 

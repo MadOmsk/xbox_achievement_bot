@@ -8,6 +8,11 @@ import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+)
 
 from bot.config import Settings, get_settings
 from bot.db.repo import Database, Repo
@@ -151,6 +156,8 @@ async def run(settings: Settings) -> None:
     scheduler.start()
     asyncio.create_task(startup_catch_up())  # noqa: RUF006
 
+    await _publish_command_menu(bot)
+
     me = await bot.me()
     log.info("bot @%s is up", me.username)
     try:
@@ -162,6 +169,36 @@ async def run(settings: Settings) -> None:
         await auth.close()
         await bot.session.close()
         await database.close()
+
+
+async def _publish_command_menu(bot: Bot) -> None:
+    """The command list Telegram shows behind the "/" button.
+
+    Two scopes, because the useful commands differ: in a group nobody needs
+    /connect, and in private nobody needs /top.
+    """
+    private = [
+        BotCommand(command="panel", description="Моя панель и настройки"),
+        BotCommand(command="connect", description="Подключить Xbox"),
+        BotCommand(command="disconnect", description="Отключить Xbox"),
+        BotCommand(command="stats", description="Моя статистика"),
+        BotCommand(command="help", description="Что я умею"),
+    ]
+    group = [
+        BotCommand(command="subscribe", description="Публиковать мои ачивки здесь"),
+        BotCommand(command="unsubscribe", description="Перестать публиковать"),
+        BotCommand(command="top", description="Таблица за месяц"),
+        BotCommand(command="recent", description="Последние ачивки чата"),
+        BotCommand(command="stats", description="Статистика игрока"),
+        BotCommand(command="compare", description="Сравнить двоих"),
+        BotCommand(command="help", description="Что я умею"),
+    ]
+    try:
+        await bot.set_my_commands(private, scope=BotCommandScopeAllPrivateChats())
+        await bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats())
+    except Exception:
+        # A cosmetic menu is not worth failing the whole startup for.
+        log.warning("could not publish the command menu", exc_info=True)
 
 
 def main() -> None:
