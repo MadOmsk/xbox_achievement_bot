@@ -11,6 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from bot.config import Settings, get_settings
 from bot.db.repo import Database, Repo
+from bot.handlers import admin as admin_handlers
 from bot.handlers import chat as chat_handlers
 from bot.handlers import connect as connect_handlers
 from bot.handlers import panel as panel_handlers
@@ -109,6 +110,7 @@ async def run(settings: Settings) -> None:
     dispatcher["fetcher"] = fetcher
     dispatcher["settings"] = settings
     dispatcher.message.outer_middleware(UsernameMiddleware(repo))
+    dispatcher.include_router(admin_handlers.router)
     dispatcher.include_router(connect_handlers.router)
     dispatcher.include_router(panel_handlers.router)
     dispatcher.include_router(chat_handlers.router)

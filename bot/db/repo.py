@@ -10,7 +10,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Self
 
@@ -96,6 +96,32 @@ class ChatTarget:
     rarity_mode: str
     min_gamerscore: int
     muted_title_ids: list[str]
+    # Filled in by the admin panel only; the publisher never looks at them.
+    is_active: bool = True
+    daily_summary: bool = True
+    subscribers: int = 0
+
+
+@dataclass(slots=True)
+class AdminUserRow:
+    tg_id: int
+    gamertag: str | None
+    username: str | None
+    xuid: str
+    gamerscore: int | None
+    is_excluded: bool
+    last_online_at: str | None
+    token_status: str | None
+    last_refresh_at: str | None
+
+
+@dataclass(slots=True)
+class PresenceRow:
+    xuid: str
+    state: str | None
+    title_id: str | None
+    title_name: str | None
+    updated_at: str | None
 
 
 @dataclass(slots=True)
@@ -419,6 +445,23 @@ class Repo:
         )
         await self._conn.commit()
 
+    async def presence_of(self, xuid: str) -> PresenceRow | None:
+        cursor = await self._conn.execute(
+            "SELECT xuid, state, title_id, title_name, updated_at FROM presence_state "
+            "WHERE xuid = ?",
+            (xuid,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return PresenceRow(
+            xuid=row["xuid"],
+            state=row["state"],
+            title_id=row["title_id"],
+            title_name=row["title_name"],
+            updated_at=row["updated_at"],
+        )
+
     async def mark_achievements_polled(self, xuid: str) -> None:
         await self._conn.execute(
             "UPDATE presence_state SET last_ach_poll_at = ? WHERE xuid = ?",
@@ -598,6 +641,129 @@ class Repo:
         )
         await self._conn.commit()
 
+    # ------------------------------------------------------------ aggregates
+
+    async def achievement_counts(self, xuid: str, since: datetime | None) -> tuple[int, int]:
+        """How many achievements and how much gamerscore since a moment.
+
+        Counted regardless of `is_backfill` (SPEC 5.9). Timestamps are stored
+        as UTC ISO strings of one shape, so a string comparison is a time
+        comparison here.
+        """
+        if since is None:
+            cursor = await self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
+                "WHERE xuid = ?",
+                (xuid,),
+            )
+        else:
+            cursor = await self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
+                "WHERE xuid = ? AND unlocked_at >= ?",
+                (xuid, _iso(since)),
+            )
+        row = await cursor.fetchone()
+        return (int(row[0]), int(row[1])) if row else (0, 0)
+
+    async def achievement_counts_by_xuid(
+        self, since: datetime | None
+    ) -> dict[str, tuple[int, int]]:
+        """The same numbers for everyone at once — one query for a whole page."""
+        if since is None:
+            cursor = await self._conn.execute(
+                "SELECT xuid, COUNT(*), COALESCE(SUM(gamerscore), 0) "
+                "FROM seen_achievements GROUP BY xuid"
+            )
+        else:
+            cursor = await self._conn.execute(
+                "SELECT xuid, COUNT(*), COALESCE(SUM(gamerscore), 0) "
+                "FROM seen_achievements WHERE unlocked_at >= ? GROUP BY xuid",
+                (_iso(since),),
+            )
+        return {row[0]: (int(row[1]), int(row[2])) for row in await cursor.fetchall()}
+
+    # ----------------------------------------------------------------- admin
+
+    async def admin_users(self) -> list[AdminUserRow]:
+        cursor = await self._conn.execute(
+            "SELECT u.tg_id, u.gamertag, u.username, u.xuid, u.gamerscore, u.is_excluded,"
+            "       u.last_online_at, t.status, t.last_refresh_at "
+            "FROM users u LEFT JOIN tokens t ON t.tg_id = u.tg_id "
+            "WHERE u.xuid IS NOT NULL "
+            "ORDER BY u.is_excluded, u.last_online_at DESC"
+        )
+        return [
+            AdminUserRow(
+                tg_id=row["tg_id"],
+                gamertag=row["gamertag"],
+                username=row["username"],
+                xuid=row["xuid"],
+                gamerscore=row["gamerscore"],
+                is_excluded=bool(row["is_excluded"]),
+                last_online_at=row["last_online_at"],
+                token_status=row["status"],
+                last_refresh_at=row["last_refresh_at"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def set_excluded(self, tg_id: int, excluded: bool, by: int | None) -> None:
+        """Exclusion is never silent: the person sees it in his panel (SPEC 6.4)."""
+        await self._conn.execute(
+            "UPDATE users SET is_excluded = ?, excluded_by = ?, excluded_at = ?, updated_at = ? "
+            "WHERE tg_id = ?",
+            (
+                1 if excluded else 0,
+                by if excluded else None,
+                utcnow_iso() if excluded else None,
+                utcnow_iso(),
+                tg_id,
+            ),
+        )
+        await self._conn.commit()
+
+    async def admin_chats(self) -> list[ChatTarget]:
+        cursor = await self._conn.execute(
+            "SELECT c.chat_id, c.title, c.is_active, s.rarity_mode, s.min_gamerscore,"
+            "       s.daily_summary, s.muted_title_ids,"
+            "       (SELECT COUNT(*) FROM subscriptions WHERE chat_id = c.chat_id) AS subs "
+            "FROM chats c JOIN chat_settings s ON s.chat_id = c.chat_id "
+            "ORDER BY c.is_active DESC, c.title"
+        )
+        return [
+            ChatTarget(
+                chat_id=row["chat_id"],
+                title=row["title"],
+                rarity_mode=row["rarity_mode"],
+                min_gamerscore=row["min_gamerscore"],
+                muted_title_ids=json.loads(row["muted_title_ids"] or "[]"),
+                is_active=bool(row["is_active"]),
+                daily_summary=bool(row["daily_summary"]),
+                subscribers=int(row["subs"]),
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def update_chat_settings(self, chat_id: int, **fields: Any) -> None:
+        allowed = {"rarity_mode", "min_gamerscore", "daily_summary"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"unknown chat_settings fields: {sorted(unknown)}")
+        if not fields:
+            return
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        await self._conn.execute(
+            f"UPDATE chat_settings SET {assignments} WHERE chat_id = ?",
+            (*fields.values(), chat_id),
+        )
+        await self._conn.commit()
+
+    async def set_chat_active(self, chat_id: int, active: bool) -> None:
+        await self._conn.execute(
+            "UPDATE chats SET is_active = ? WHERE chat_id = ?", (1 if active else 0, chat_id)
+        )
+        await self._conn.commit()
+
     async def upsert_title(self, title_id: str, name: str, platform: str | None) -> None:
         await self._conn.execute(
             "INSERT INTO titles (title_id, name, platform, updated_at) VALUES (?, ?, ?, ?) "
@@ -646,3 +812,8 @@ def _as_user_settings(row: aiosqlite.Row) -> UserSettings:
         digest_threshold=row["digest_threshold"],
         tz_offset_min=row["tz_offset_min"],
     )
+
+
+def _iso(moment: datetime) -> str:
+    """Stored timestamps are UTC ISO strings truncated to seconds."""
+    return moment.astimezone(UTC).isoformat(timespec="seconds")

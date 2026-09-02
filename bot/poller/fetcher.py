@@ -42,11 +42,13 @@ class Fetcher:
             return 0
 
         log.info("tg_id=%s unlocked %s new achievements in %s", tg_id, len(new_rows), title_id)
-        resolved = await self._title_name(tg_id, title_id, title_name)
+        resolved = await self.ensure_title_name(tg_id, title_id, title_name)
         await self._publisher.publish(tg_id, xuid, gamertag, new_rows, resolved)
         return len(new_rows)
 
-    async def _title_name(self, tg_id: int, title_id: str, from_presence: str | None) -> str | None:
+    async def ensure_title_name(
+        self, tg_id: int, title_id: str, from_presence: str | None
+    ) -> str | None:
         """Presence leaves the name empty for PC titles, so ask titlehub once.
 
         "неизвестная игра" in a published message is worse than one extra
@@ -146,6 +148,28 @@ class Fetcher:
                 published,
             )
             return len(candidates), published
+
+    async def refresh_user(self, tg_id: int, xuid: str, gamertag: str) -> str:
+        """An out-of-turn look at one person, for the admin card (SPEC 6.4).
+
+        The only on-demand API call in the interface, so it does the whole
+        round: presence, the current game's achievements, title history.
+        """
+        snapshot = await self._client.presence(tg_id)
+        await self._repo.save_presence_state(
+            xuid, snapshot.state, snapshot.title_id, snapshot.title_name, changed=False
+        )
+
+        published = 0
+        if snapshot.in_game and snapshot.title_id:
+            published = await self.poll_title(
+                tg_id, xuid, gamertag, snapshot.title_id, snapshot.platform, snapshot.title_name
+            )
+        await self.refresh_title_history(tg_id, xuid)
+
+        where = snapshot.title_name or snapshot.title_id or "без игры"
+        state = f"в сети, {where}" if snapshot.state == "Online" else "не в сети"
+        return f"Обновлено: {state}; новых ачивок {published}."
 
     async def refresh_title_history(self, tg_id: int, xuid: str) -> None:
         """Source of /stats, /top and of the gamerscore in the panel (SPEC 5.4)."""

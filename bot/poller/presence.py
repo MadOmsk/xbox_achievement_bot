@@ -57,11 +57,20 @@ class PresencePoller:
         snapshot = await self._client.presence(target.tg_id)
         changed = snapshot.state != target.state or snapshot.title_id != target.title_id
 
+        # Presence returns an empty name for PC titles, so resolve it once when
+        # the game starts rather than only when an achievement drops — the
+        # admin card and the published message both read it from here.
+        title_name = snapshot.title_name
+        if snapshot.title_id and not title_name:
+            title_name = await self._fetcher.ensure_title_name(
+                target.tg_id, snapshot.title_id, None
+            )
+
         await self._repo.save_presence_state(
             target.xuid,
             snapshot.state,
             snapshot.title_id,
-            snapshot.title_name,
+            title_name,
             changed=changed,
         )
         if snapshot.state == "Online":
@@ -82,7 +91,7 @@ class PresencePoller:
                 target,
                 gamertag,
                 snapshot.title_id,
-                snapshot.title_name,
+                title_name,
                 force=changed,
                 platform_hint=snapshot,
             )
