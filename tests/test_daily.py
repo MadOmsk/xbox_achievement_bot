@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 from bot.db.repo import AchievementRow, Repo
 from bot.poller.daily import DailySummary
-from bot.services.stats import day_start_utc
 from bot.util import utcnow
 
 CHAT_ID = -100500
@@ -67,7 +66,7 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
     assert text is not None
     assert "Igor" in text and "Alex" in text
     assert "💎 1" in text  # only the 2.4% one is rare at a 10% threshold
-    assert "Всего за день: 3 ачивки, +110 G" in text
+    assert "Всего за сутки: 3 ачивки, +110 G" in text
     assert "За месяц:" in text
 
 
@@ -77,11 +76,25 @@ async def test_silent_when_nobody_unlocked_anything(repo: Repo) -> None:
     assert await DailySummary(FakeBot(), repo)._build(CHAT_ID, 0, 10.0, utcnow().date()) is None
 
 
-async def test_yesterday_does_not_count_as_today(repo: Repo) -> None:
+async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
+    """The summary fires at 23:00, so a calendar window would leave 23:00–00:00
+    in no report at all — every day would lose its last hour."""
     await _chat_with_two_players(repo)
-    yesterday = day_start_utc(0) - timedelta(hours=1)
-    await repo.insert_new_achievements(XUID_A, [achievement("old", yesterday)], is_backfill=False)
-    assert await DailySummary(FakeBot(), repo)._build(CHAT_ID, 0, 10.0, utcnow().date()) is None
+    await repo.insert_new_achievements(
+        XUID_A, [achievement("too-old", utcnow() - timedelta(hours=25))], is_backfill=False
+    )
+    job = DailySummary(FakeBot(), repo)
+    assert await job._build(CHAT_ID, 0, 10.0, utcnow().date()) is None
+
+    # 23 hours ago is still inside the window, even though it is another
+    # calendar day for someone.
+    await repo.insert_new_achievements(
+        XUID_A,
+        [achievement("late-yesterday", utcnow() - timedelta(hours=23))],
+        is_backfill=False,
+    )
+    text = await job._build(CHAT_ID, 0, 10.0, utcnow().date())
+    assert text is not None and "Igor" in text
 
 
 async def test_summary_is_sent_once_per_day(repo: Repo) -> None:

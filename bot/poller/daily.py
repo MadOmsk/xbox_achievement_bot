@@ -8,19 +8,20 @@ change at runtime; a cron trigger would have to be rebuilt on every change.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
-from bot.services.stats import day_start_utc, global_offset_minutes, local_now, month_start_utc
-from bot.util import thousands
+from bot.services.stats import global_offset_minutes, local_now, month_start_utc
+from bot.util import thousands, utcnow
 
 log = logging.getLogger(__name__)
 
 MONTH_TOP = 10
+DAY_WINDOW_HOURS = 24
 MONTHS = (
     "января",
     "февраля",
@@ -84,16 +85,22 @@ class DailySummary:
             return 10.0
 
     async def _build(self, chat_id: int, offset: int, threshold: float, today: date) -> str | None:
-        day_rows = await self._repo.chat_member_stats(chat_id, day_start_utc(offset), threshold)
+        # A rolling 24 hours, not the calendar day. The summary goes out at 23:00,
+        # so a calendar window would leave 23:00–00:00 in no report at all — every
+        # day quietly lost its last hour. It also sidesteps the timezone question,
+        # since members live in different ones (SPEC 5.7).
+        day_rows = await self._repo.chat_member_stats(
+            chat_id, utcnow() - timedelta(hours=DAY_WINDOW_HOURS), threshold
+        )
         if not day_rows:
             return None
 
-        lines = [f"📊 Итоги дня, {today.day} {MONTHS[today.month - 1]}", ""]
+        lines = [f"📊 Итоги за сутки, {today.day} {MONTHS[today.month - 1]}", ""]
         lines += [_day_line(row) for row in day_rows]
 
         total = sum(row.count for row in day_rows)
         score = sum(row.score for row in day_rows)
-        lines += ["", f"Всего за день: {plural_achievements(total)}, +{thousands(score)} G"]
+        lines += ["", f"Всего за сутки: {plural_achievements(total)}, +{thousands(score)} G"]
 
         month_rows = await self._repo.chat_member_stats(chat_id, month_start_utc(offset), threshold)
         if month_rows:
