@@ -67,7 +67,7 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
     assert text is not None
     assert "Igor" in text and "Alex" in text
     assert "💎 1" in text  # only the 2.4% one is rare at a 10% threshold
-    assert "Всего за день: 3 ачивок, +110 G" in text
+    assert "Всего за день: 3 ачивки, +110 G" in text
     assert "За месяц:" in text
 
 

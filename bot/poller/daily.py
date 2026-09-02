@@ -14,6 +14,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 
 from bot.db.repo import ChatMemberStat, Repo
+from bot.services.achievements import plural_achievements
 from bot.services.stats import day_start_utc, global_offset_minutes, local_now, month_start_utc
 from bot.util import thousands
 
@@ -92,7 +93,7 @@ class DailySummary:
 
         total = sum(row.count for row in day_rows)
         score = sum(row.score for row in day_rows)
-        lines += ["", f"Всего за день: {total} ачивок, +{thousands(score)} G"]
+        lines += ["", f"Всего за день: {plural_achievements(total)}, +{thousands(score)} G"]
 
         month_rows = await self._repo.chat_member_stats(chat_id, month_start_utc(offset), threshold)
         if month_rows:
