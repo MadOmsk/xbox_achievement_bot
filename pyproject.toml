@@ -1,0 +1,40 @@
+[project]
+name = "xbox-achievement-bot"
+version = "0.1.0"
+description = "Telegram bot publishing Xbox achievements of chat members"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.13",
+    "xbox-webapi>=2.1.0",
+    "aiohttp>=3.9",
+    "httpx>=0.27",
+    "aiosqlite>=0.20",
+    "apscheduler>=3.10",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6", "pytest>=8", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+# Bot messages are Russian by design (CLAUDE.md), so Cyrillic in string literals
+# is not an ambiguity to warn about.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
