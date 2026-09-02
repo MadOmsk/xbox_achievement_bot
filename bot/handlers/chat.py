@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -26,6 +27,7 @@ from aiogram.types import (
 )
 
 from bot.db.repo import RecentAchievement, Repo, User
+from bot.poller.daily import build_summary, current_rare_threshold
 from bot.services.achievements import (
     platform_note,
     plural_achievements,
@@ -34,15 +36,21 @@ from bot.services.achievements import (
 from bot.services.stats import (
     counters_for,
     global_offset_minutes,
+    local_now,
     month_start_utc,
 )
-from bot.util import humanize_ago, thousands
+from bot.util import cooldown_minutes_left, humanize_ago, thousands
 
 log = logging.getLogger(__name__)
 
 router = Router(name="chat")
 
 GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
+
+# Per chat, not per person: rate-limiting only the requester would still let a
+# whole chat spam it in turns.
+SUMMARY_COOLDOWN_SECONDS = 600
+_last_summary: dict[int, float] = {}
 
 
 class UsernameMiddleware(BaseMiddleware):
@@ -204,6 +212,37 @@ async def top(message: Message, repo: Repo) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("summary"))
+async def summary_command(message: Message, repo: Repo) -> None:
+    """The same report the 23:00 job sends, on demand (SPEC 5.7, 6.3).
+
+    Rate-limited per chat rather than per person: limiting only the requester
+    would still let the whole chat spam it in turns, one person at a time.
+    """
+    if message.chat.type not in GROUP_TYPES:
+        await message.answer("Сводка считается по чату — набери команду в группе.")
+        return
+
+    minutes_left = cooldown_minutes_left(
+        _last_summary.get(message.chat.id), time.monotonic(), SUMMARY_COOLDOWN_SECONDS
+    )
+    if minutes_left:
+        await message.answer(f"Сводку уже присылали недавно. Ещё раз — через {minutes_left} мин.")
+        return
+
+    # The cooldown covers "nothing new" too — that answer is still a message,
+    # and without this it could be spammed just as freely as a real summary.
+    _last_summary[message.chat.id] = time.monotonic()
+
+    offset = await global_offset_minutes(repo)
+    threshold = await current_rare_threshold(repo)
+    text = await build_summary(repo, message.chat.id, offset, threshold, local_now(offset).date())
+    if text is None:
+        await message.answer("За последние сутки в чате пока никто ничего не выбил.")
+        return
+    await message.answer(text)
+
+
 @router.message(Command("recent"))
 async def recent(message: Message, repo: Repo, command: CommandObject) -> None:
     if message.chat.type not in GROUP_TYPES:
@@ -261,6 +300,7 @@ HELP_TEXT = (
     "/stats — статистика игрока\n"
     "/compare @кто — сравнить двоих\n"
     "/top — таблица за месяц\n"
+    "/summary — сводка за последние сутки (не чаще раза в 10 мин)\n"
     "/recent [N] — последние ачивки чата\n\n"
     "Настройки — в личке: редкость, Xbox 360, часовой пояс."
 )

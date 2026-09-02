@@ -50,3 +50,18 @@ def humanize_ago(timestamp: str | None) -> str:
 
 def thousands(value: int) -> str:
     return f"{value:,}".replace(",", " ")
+
+
+def cooldown_minutes_left(last: float | None, now: float, cooldown_seconds: int) -> int:
+    """Minutes until a rate-limited action is allowed again; 0 means now.
+
+    Used for every on-demand button or command with a per-target cooldown —
+    the panel sync, the admin refresh, /summary — so they all round the same
+    way instead of each rolling its own off-by-one.
+    """
+    if last is None:
+        return 0
+    waited = now - last
+    if waited >= cooldown_seconds:
+        return 0
+    return int((cooldown_seconds - waited) // 60) + 1

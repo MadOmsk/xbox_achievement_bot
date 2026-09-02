@@ -59,7 +59,9 @@ class DailySummary:
             if await self._repo.daily_report_sent(chat.chat_id, report_date):
                 continue
 
-            text = await self._build(chat.chat_id, offset, threshold, now_local.date())
+            text = await build_summary(
+                self._repo, chat.chat_id, offset, threshold, now_local.date()
+            )
             if text is None:
                 # Nobody unlocked anything: staying silent keeps the summary
                 # meaningful instead of turning it into daily noise (SPEC 5.7).
@@ -78,36 +80,45 @@ class DailySummary:
             await self._repo.mark_daily_report_sent(chat.chat_id, report_date)
 
     async def _rare_threshold(self) -> float:
-        raw = await self._repo.get_app_setting("rare_threshold_percent", "10")
-        try:
-            return float(raw or 10)
-        except ValueError:
-            return 10.0
+        return await current_rare_threshold(self._repo)
 
-    async def _build(self, chat_id: int, offset: int, threshold: float, today: date) -> str | None:
-        # A rolling 24 hours, not the calendar day. The summary goes out at 23:00,
-        # so a calendar window would leave 23:00–00:00 in no report at all — every
-        # day quietly lost its last hour. It also sidesteps the timezone question,
-        # since members live in different ones (SPEC 5.7).
-        day_rows = await self._repo.chat_member_stats(
-            chat_id, utcnow() - timedelta(hours=DAY_WINDOW_HOURS), threshold
-        )
-        if not day_rows:
-            return None
 
-        lines = [f"📊 Итоги за сутки, {today.day} {MONTHS[today.month - 1]}", ""]
-        lines += [_day_line(row) for row in day_rows]
+async def current_rare_threshold(repo: Repo) -> float:
+    raw = await repo.get_app_setting("rare_threshold_percent", "10")
+    try:
+        return float(raw or 10)
+    except ValueError:
+        return 10.0
 
-        total = sum(row.count for row in day_rows)
-        score = sum(row.score for row in day_rows)
-        lines += ["", f"Всего за сутки: {plural_achievements(total)}, +{thousands(score)} G"]
 
-        month_rows = await self._repo.chat_member_stats(chat_id, month_start_utc(offset), threshold)
-        if month_rows:
-            lines += ["", "За месяц:"]
-            for place, row in enumerate(month_rows[:MONTH_TOP], start=1):
-                lines.append(f"{place}. {_name(row)}  {row.count}  +{thousands(row.score)} G")
-        return "\n".join(lines)
+async def build_summary(
+    repo: Repo, chat_id: int, offset: int, threshold: float, today: date
+) -> str | None:
+    """The same rolling-24h report used by the scheduled job and by /summary
+    on demand — one implementation, one set of numbers (SPEC 5.7, 6.3)."""
+    # A rolling 24 hours, not the calendar day. The scheduled summary goes out
+    # at 23:00, so a calendar window would leave 23:00–00:00 in no report at
+    # all — every day quietly lost its last hour. It also sidesteps the
+    # timezone question, since members live in different ones.
+    day_rows = await repo.chat_member_stats(
+        chat_id, utcnow() - timedelta(hours=DAY_WINDOW_HOURS), threshold
+    )
+    if not day_rows:
+        return None
+
+    lines = [f"📊 Итоги за сутки, {today.day} {MONTHS[today.month - 1]}", ""]
+    lines += [_day_line(row) for row in day_rows]
+
+    total = sum(row.count for row in day_rows)
+    score = sum(row.score for row in day_rows)
+    lines += ["", f"Всего за сутки: {plural_achievements(total)}, +{thousands(score)} G"]
+
+    month_rows = await repo.chat_member_stats(chat_id, month_start_utc(offset), threshold)
+    if month_rows:
+        lines += ["", "За месяц:"]
+        for place, row in enumerate(month_rows[:MONTH_TOP], start=1):
+            lines.append(f"{place}. {_name(row)}  {row.count}  +{thousands(row.score)} G")
+    return "\n".join(lines)
 
 
 def _day_line(row: ChatMemberStat) -> str:

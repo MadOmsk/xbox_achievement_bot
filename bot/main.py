@@ -188,6 +188,7 @@ async def _publish_command_menu(bot: Bot) -> None:
         BotCommand(command="subscribe", description="Публиковать мои ачивки здесь"),
         BotCommand(command="unsubscribe", description="Перестать публиковать"),
         BotCommand(command="top", description="Таблица за месяц"),
+        BotCommand(command="summary", description="Сводка за последние сутки"),
         BotCommand(command="recent", description="Последние ачивки чата"),
         BotCommand(command="stats", description="Статистика игрока"),
         BotCommand(command="compare", description="Сравнить двоих"),

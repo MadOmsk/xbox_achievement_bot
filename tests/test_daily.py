@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from bot.db.repo import AchievementRow, Repo
-from bot.poller.daily import DailySummary
+from bot.poller.daily import DailySummary, build_summary
 from bot.util import utcnow
 
 CHAT_ID = -100500
@@ -61,7 +61,7 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
         XUID_B, [achievement("b1", now, 20, rarity=None)], is_backfill=True
     )
 
-    text = await DailySummary(FakeBot(), repo)._build(CHAT_ID, 0, 10.0, now.date())
+    text = await build_summary(repo, CHAT_ID, 0, 10.0, now.date())
 
     assert text is not None
     assert "Igor" in text and "Alex" in text
@@ -73,7 +73,7 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
 async def test_silent_when_nobody_unlocked_anything(repo: Repo) -> None:
     """Otherwise the summary becomes daily noise (SPEC 5.7)."""
     await _chat_with_two_players(repo)
-    assert await DailySummary(FakeBot(), repo)._build(CHAT_ID, 0, 10.0, utcnow().date()) is None
+    assert await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date()) is None
 
 
 async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
@@ -83,8 +83,7 @@ async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
     await repo.insert_new_achievements(
         XUID_A, [achievement("too-old", utcnow() - timedelta(hours=25))], is_backfill=False
     )
-    job = DailySummary(FakeBot(), repo)
-    assert await job._build(CHAT_ID, 0, 10.0, utcnow().date()) is None
+    assert await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date()) is None
 
     # 23 hours ago is still inside the window, even though it is another
     # calendar day for someone.
@@ -93,7 +92,7 @@ async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
         [achievement("late-yesterday", utcnow() - timedelta(hours=23))],
         is_backfill=False,
     )
-    text = await job._build(CHAT_ID, 0, 10.0, utcnow().date())
+    text = await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date())
     assert text is not None and "Igor" in text
 
 

@@ -25,7 +25,7 @@ from bot.handlers.keyboards import (
 from bot.poller.fetcher import Fetcher
 from bot.services.achievements import plural_achievements
 from bot.services.stats import counters_for
-from bot.util import humanize_ago, parse_iso, thousands
+from bot.util import cooldown_minutes_left, humanize_ago, parse_iso, thousands
 
 log = logging.getLogger(__name__)
 
@@ -85,10 +85,11 @@ async def panel_sync(
         await callback.answer("Сначала подключи Xbox: /connect", show_alert=True)
         return
 
-    waited = time.monotonic() - _last_sync.get(tg_id, float("-inf"))
-    if waited < SYNC_COOLDOWN_SECONDS:
-        minutes = int((SYNC_COOLDOWN_SECONDS - waited) // 60) + 1
-        await callback.answer(f"Уже синхронизировал. Ещё раз — через {minutes} мин.")
+    minutes_left = cooldown_minutes_left(
+        _last_sync.get(tg_id), time.monotonic(), SYNC_COOLDOWN_SECONDS
+    )
+    if minutes_left:
+        await callback.answer(f"Уже синхронизировал. Ещё раз — через {minutes_left} мин.")
         return
 
     _last_sync[tg_id] = time.monotonic()
