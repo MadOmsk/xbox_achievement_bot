@@ -19,6 +19,7 @@ from bot.handlers.keyboards import (
 )
 from bot.handlers.panel import render_panel
 from bot.services.connect import ConnectService
+from bot.services.notify import AdminNotifier
 
 log = logging.getLogger(__name__)
 
@@ -103,14 +104,16 @@ async def disconnect_cancel(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "disconnect:yes")
-async def disconnect_confirm(callback: CallbackQuery, repo: Repo) -> None:
+async def disconnect_confirm(callback: CallbackQuery, repo: Repo, notifier: AdminNotifier) -> None:
     tg_id = callback.from_user.id
     user = await repo.get_user(tg_id)
+    gamertag = (user.gamertag if user else None) or f"id{tg_id}"
     if user is not None and user.xuid:
         await repo.delete_presence_state(user.xuid)
     await repo.delete_token(tg_id)
     await repo.delete_subscriptions_of_user(tg_id)
     await repo.unlink_xbox_account(tg_id)
+    await notifier.user_disconnected(tg_id, gamertag, "сам через /disconnect")
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
@@ -134,10 +137,15 @@ async def relogin(callback: CallbackQuery, connect: ConnectService) -> None:
 
 
 @router.callback_query(F.data == "optout")
-async def optout(callback: CallbackQuery, repo: Repo) -> None:
+async def optout(callback: CallbackQuery, repo: Repo, notifier: AdminNotifier) -> None:
     """Left on purpose: subscriptions go, history stays, reminders stop."""
-    await repo.set_token_status(callback.from_user.id, "revoked")
-    await repo.delete_subscriptions_of_user(callback.from_user.id)
+    tg_id = callback.from_user.id
+    user = await repo.get_user(tg_id)
+    await repo.set_token_status(tg_id, "revoked")
+    await repo.delete_subscriptions_of_user(tg_id)
+    await notifier.user_disconnected(
+        tg_id, (user.gamertag if user else None) or f"id{tg_id}", "отписался кнопкой"
+    )
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             "Хорошо, больше не напоминаю. Историю ачивок сохранил — "

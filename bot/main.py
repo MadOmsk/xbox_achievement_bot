@@ -25,6 +25,7 @@ from bot.poller.reminders import ReminderJob
 from bot.poller.scheduler import PollerScheduler
 from bot.services.connect import ConnectService
 from bot.services.crypto import TokenCipher
+from bot.services.notify import AdminNotifier
 from bot.services.xbox.auth import XboxAuthService, XboxIdentity
 from bot.services.xbox.client import XboxClient
 from bot.util import parse_iso
@@ -64,6 +65,9 @@ async def run(settings: Settings) -> None:
         default=DefaultBotProperties(link_preview_is_disabled=True),
     )
 
+    notifier = AdminNotifier(bot, repo, settings.admin_tg_ids)
+    auth.on_token_dead = notifier.token_dead
+
     client = XboxClient(auth)
     publisher = Publisher(bot, repo)
     fetcher = Fetcher(repo, client, publisher, settings.backfill_concurrency)
@@ -91,13 +95,17 @@ async def run(settings: Settings) -> None:
 
     async def on_linked(tg_id: int, identity: XboxIdentity) -> None:
         """Runs in the web callback, right after the account is stored."""
+        # No achievements yet means this account is new to the bot, not someone
+        # signing in again after his token expired.
+        is_new = not await repo.has_any_achievements(identity.xuid)
         await bot.send_message(tg_id, f"✅ Подключил Xbox: {identity.gamertag}")
+        await notifier.user_connected(tg_id, identity.gamertag, is_new=is_new)
         settings_row = await repo.get_user_settings(tg_id)
         if settings_row is None or settings_row.tz_offset_min is None:
             await bot.send_message(
                 tg_id, connect_handlers.TIMEZONE_PROMPT, reply_markup=timezone_keyboard()
             )
-        if not await repo.has_any_achievements(identity.xuid):
+        if is_new:
             await bot.send_message(tg_id, "Читаю твою историю ачивок, это займёт минуту…")
             asyncio.create_task(backfill(tg_id, identity.xuid))  # noqa: RUF006
 
@@ -109,6 +117,7 @@ async def run(settings: Settings) -> None:
     dispatcher["connect"] = connect_service
     dispatcher["fetcher"] = fetcher
     dispatcher["settings"] = settings
+    dispatcher["notifier"] = notifier
     dispatcher.message.outer_middleware(UsernameMiddleware(repo))
     dispatcher.include_router(admin_handlers.router)
     dispatcher.include_router(connect_handlers.router)

@@ -6,6 +6,7 @@ No I/O here: the poller decides when, this module decides whether and how.
 from __future__ import annotations
 
 from bot.db.repo import AchievementRow, ChatTarget, UserSettings
+from bot.util import thousands
 
 DIAMOND_MAX_PERCENT = 5.0
 STAR_MAX_PERCENT = 15.0
@@ -77,7 +78,10 @@ def format_digest(gamertag: str, title_name: str | None, achievements: list[Achi
         (a.title_name for a in achievements if a.title_name), "неизвестная игра"
     )
     total_score = sum(a.gamerscore for a in achievements)
-    header = f"🎮 {gamertag}, {title} — {_plural(len(achievements))} за сессию (+{total_score} G)"
+    header = (
+        f"🎮 {gamertag}, {title} — {plural_achievements(len(achievements))} "
+        f"за сессию (+{total_score} G)"
+    )
 
     lines = [header, ""]
     for achievement in achievements[:DIGEST_PREVIEW]:
@@ -95,11 +99,12 @@ def format_digest(gamertag: str, title_name: str | None, achievements: list[Achi
     return "\n".join(lines)
 
 
-def _plural(count: int) -> str:
+def plural_achievements(count: int) -> str:
     tail = count % 10
     hundreds = count % 100
+    number = thousands(count)
     if tail == 1 and hundreds != 11:
-        return f"{count} ачивка"
+        return f"{number} ачивка"
     if tail in (2, 3, 4) and hundreds not in (12, 13, 14):
-        return f"{count} ачивки"
-    return f"{count} ачивок"
+        return f"{number} ачивки"
+    return f"{number} ачивок"

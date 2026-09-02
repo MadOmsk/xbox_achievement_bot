@@ -30,7 +30,7 @@ from bot.services.stats import (
     global_offset_minutes,
     month_start_utc,
 )
-from bot.util import parse_iso, utcnow
+from bot.util import humanize_ago
 
 log = logging.getLogger(__name__)
 
@@ -316,7 +316,7 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
     for user in chunk:
         name = user.gamertag or f"id{user.tg_id}"
         lines.append(
-            f"{_icon(user)} {name:<14} {_ago(user.last_online_at):<16} "
+            f"{_icon(user)} {name:<14} {humanize_ago(user.last_online_at):<16} "
             f"{today.get(user.xuid, (0, 0))[0]} / {month.get(user.xuid, (0, 0))[0]}"
             f"{_note(user)}"
         )
@@ -353,7 +353,7 @@ async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     login = "— не подключён"
     if token is not None:
         login = {
-            "active": f"✅ активен, обновлён {_ago(token.last_refresh_at)}",
+            "active": f"✅ активен, обновлён {humanize_ago(token.last_refresh_at)}",
             "invalid": "⚠️ протух",
             "revoked": "🔕 отключён самим пользователем",
         }.get(token.status, token.status)
@@ -367,9 +367,9 @@ async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
             game = await repo.title_name(presence.title_id) or presence.title_id
         game = game or "без игры"
         online = (
-            f"{_ago(presence.updated_at)}, {game}"
+            f"{humanize_ago(presence.updated_at)}, {game}"
             if presence.state == "Online"
-            else _ago(presence.updated_at)
+            else humanize_ago(presence.updated_at)
         )
 
     text = (
@@ -477,20 +477,6 @@ def _note(user: AdminUserRow) -> str:
     if user.token_status == "revoked":
         return "  отписался"
     return ""
-
-
-def _ago(timestamp: str | None) -> str:
-    moment = parse_iso(timestamp)
-    if moment is None:
-        return "никогда"
-    seconds = int((utcnow() - moment).total_seconds())
-    if seconds < 120:
-        return "только что"
-    if seconds < 3600:
-        return f"{seconds // 60} мин назад"
-    if seconds < 86400:
-        return f"{seconds // 3600} ч назад"
-    return f"{seconds // 86400} дн назад"
 
 
 async def _redraw(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup) -> None:

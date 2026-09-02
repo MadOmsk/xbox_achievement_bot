@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -58,6 +59,9 @@ class XboxAuthService:
         self._settings = settings
         self._repo = repo
         self._cipher = cipher
+        # Called when a token is declared dead. A plain callback rather than a
+        # Telegram object: this layer must not know the bot exists (CLAUDE.md).
+        self.on_token_dead: Callable[[int], Awaitable[None]] | None = None
         self._session: SignedSession | None = None
         self._managers: dict[int, AuthenticationManager] = {}
         self._locks: dict[int, asyncio.Lock] = {}
@@ -194,6 +198,11 @@ class XboxAuthService:
     async def _kill(self, tg_id: int) -> None:
         await self._repo.set_token_status(tg_id, "invalid")
         self._managers.pop(tg_id, None)
+        if self.on_token_dead is not None:
+            try:
+                await self.on_token_dead(tg_id)
+            except Exception:
+                log.exception("token-dead callback failed for tg_id=%s", tg_id)
 
     # ------------------------------------------------------------ helpers
 

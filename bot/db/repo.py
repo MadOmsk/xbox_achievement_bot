@@ -514,6 +514,31 @@ class Repo:
         await self._conn.commit()
         return new_rows
 
+    async def last_achievement(self, xuid: str) -> AchievementRow | None:
+        """The most recent unlock, for the panel. Undated rows never win."""
+        cursor = await self._conn.execute(
+            "SELECT s.*, t.name AS game FROM seen_achievements s "
+            "LEFT JOIN titles t ON t.title_id = s.title_id "
+            "WHERE s.xuid = ? AND s.unlocked_at IS NOT NULL "
+            "ORDER BY s.unlocked_at DESC LIMIT 1",
+            (xuid,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AchievementRow(
+            title_id=row["title_id"],
+            achievement_id=row["achievement_id"],
+            name=row["name"],
+            description=row["description"],
+            icon_url=row["icon_url"],
+            unlocked_at=row["unlocked_at"],
+            gamerscore=row["gamerscore"],
+            rarity_percent=row["rarity_percent"],
+            platform=row["platform"],
+            title_name=row["game"],
+        )
+
     async def has_any_achievements(self, xuid: str) -> bool:
         cursor = await self._conn.execute(
             "SELECT 1 FROM seen_achievements WHERE xuid = ? LIMIT 1", (xuid,)

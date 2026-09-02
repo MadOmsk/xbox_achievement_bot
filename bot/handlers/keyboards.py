@@ -47,9 +47,47 @@ def connect_keyboard(url: str) -> InlineKeyboardMarkup:
     )
 
 
-def panel_keyboard(tz_offset_min: int | None) -> InlineKeyboardMarkup:
+# "Never digest" is stored as a number rather than NULL so the publisher stays
+# a single comparison: any real session is smaller than this.
+DIGEST_NEVER = 99
+DIGEST_CHOICES = (2, 3, 4, 5, 6, 8, 10, DIGEST_NEVER)
+
+
+def format_digest(threshold: int) -> str:
+    return "никогда" if threshold >= DIGEST_NEVER else f"от {threshold} ачивок"
+
+
+def format_rarity(mode: str, threshold: str | float) -> str:
+    return "любые" if mode != "rare" else f"только редкие (≤ {threshold}%)"
+
+
+def panel_keyboard(
+    tz_offset_min: int | None,
+    rarity_mode: str = "all",
+    rare_threshold: str | float = 10,
+    show_x360: bool = True,
+    digest_threshold: int = 3,
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Редкость: {format_rarity(rarity_mode, rare_threshold)}",
+                    callback_data="panel:rarity",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Xbox 360: {'показывать' if show_x360 else 'не показывать'}",
+                    callback_data="panel:x360",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"Сводка: {format_digest(digest_threshold)} ▸",
+                    callback_data="panel:digest",
+                )
+            ],
             [
                 InlineKeyboardButton(
                     text=f"Часовой пояс: {format_offset(tz_offset_min)} ▸",
@@ -60,6 +98,19 @@ def panel_keyboard(tz_offset_min: int | None) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
         ]
     )
+
+
+def digest_keyboard(current: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for value in DIGEST_CHOICES:
+        mark = "• " if value == current else ""
+        label = "никогда" if value >= DIGEST_NEVER else str(value)
+        builder.add(
+            InlineKeyboardButton(text=f"{mark}{label}", callback_data=f"panel:digest:{value}")
+        )
+    builder.adjust(4)
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="panel:refresh"))
+    return builder.as_markup()
 
 
 def deep_link_keyboard(url: str) -> InlineKeyboardMarkup:
