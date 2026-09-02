@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, F, Router
-from aiogram.enums import ChatType
+from aiogram.enums import ChatType, ParseMode
 from aiogram.filters import (
     IS_MEMBER,
     IS_NOT_MEMBER,
@@ -240,7 +240,7 @@ async def summary_command(message: Message, repo: Repo) -> None:
     if text is None:
         await message.answer("За последние сутки в чате пока никто ничего не выбил.")
         return
-    await message.answer(text)
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("recent"))

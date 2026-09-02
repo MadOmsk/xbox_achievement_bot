@@ -65,9 +65,26 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
 
     assert text is not None
     assert "Igor" in text and "Alex" in text
-    assert "💎 1" in text  # only the 2.4% one is rare at a 10% threshold
+    assert "💎1" in text  # only the 2.4% one is rare at a 10% threshold
     assert "Всего за сутки: 3 ачивки, +110 G" in text
-    assert "За месяц:" in text
+    assert "За месяц" in text
+    assert "<pre>" in text and "</pre>" in text  # a monospace table, not prose
+
+
+async def test_gamertag_is_escaped_inside_the_html_table(repo: Repo) -> None:
+    """The table is an HTML <pre> block; an unescaped "<" or "&" in a
+    gamertag would break the markup Telegram parses."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    await repo.ensure_user(1, "weird")
+    await repo.link_xbox_account(1, XUID_A, "A&B<C>", 1000)
+    await repo.subscribe(CHAT_ID, 1)
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
+
+    text = await build_summary(repo, CHAT_ID, 0, 10.0, utcnow().date())
+
+    assert text is not None
+    assert "<C>" not in text  # would be parsed as a (bogus) HTML tag
+    assert "&amp;" in text and "&lt;" in text
 
 
 async def test_silent_when_nobody_unlocked_anything(repo: Repo) -> None:
