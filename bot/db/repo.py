@@ -26,11 +26,13 @@ MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 DEFAULT_APP_SETTINGS: dict[str, str] = {
     "rare_threshold_percent": "10",
     "daily_summary_time": "23:00",
-    # Row caps for the two game/player tables (SPEC 6.3, 7.2) — separate
+    # Row caps for the game/player tables (SPEC 6.3, 6.6, 7.2) — separate
     # settings because they cap different things: players in /summary's
-    # leaderboard, games in /stats' "Игры за 30 дней".
+    # leaderboard, games in /stats' "Игры за 30 дней", games offered as
+    # one-tap shortcuts in /hltb.
     "summary_top_limit": "15",
     "stats_games_limit": "15",
+    "hltb_recent_games_limit": "20",
 }
 
 

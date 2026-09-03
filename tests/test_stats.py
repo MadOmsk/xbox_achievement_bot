@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from bot.db.repo import AchievementRow, Repo
-from bot.services.stats import counters_for, month_start_utc, today_cutoff_utc
+from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 
 XUID = "2533274829605736"
 
@@ -32,11 +32,13 @@ def test_today_is_a_rolling_24_hours_not_a_calendar_day() -> None:
     assert today_cutoff_utc(now) == datetime(2026, 9, 1, 22, 0, tzinfo=UTC)
 
 
-def test_month_boundary_follows_the_person() -> None:
-    now = datetime(2026, 9, 1, 1, 0, tzinfo=UTC)
-    # For UTC-5 it is still August.
-    assert month_start_utc(-5 * 60, now) == datetime(2026, 8, 1, 5, 0, tzinfo=UTC)
-    assert month_start_utc(0, now) == datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
+def test_month_is_a_rolling_30_days_not_a_calendar_month() -> None:
+    """No timezone parameter, same as today_cutoff_utc — a mismatched window
+    against /stats' equally-30-day games table is what made this look like a
+    counting bug rather than two different definitions of "month" (SPEC 5.9)."""
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+    assert month_cutoff_utc(now) == now - timedelta(days=30)
+    assert month_cutoff_utc(now) == datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 
 
 async def test_counters_include_backfilled_rows(repo: Repo) -> None:
@@ -44,6 +46,7 @@ async def test_counters_include_backfilled_rows(repo: Repo) -> None:
     now = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
     await repo.insert_new_achievements(
         XUID,
+        # 18 days before `now` — inside the 30-day rolling "month" window.
         [row("old", "2026-08-15T10:00:00+00:00", 20)],
         is_backfill=True,
     )
@@ -57,10 +60,10 @@ async def test_counters_include_backfilled_rows(repo: Repo) -> None:
         is_backfill=False,
     )
 
-    counters = await counters_for(repo, XUID, 0, now)
+    counters = await counters_for(repo, XUID, now)
 
     assert (counters.today, counters.today_score) == (1, 15)
-    assert (counters.month, counters.month_score) == (2, 20)
+    assert (counters.month, counters.month_score) == (3, 40)
     # Counters has no lifetime total (SPEC 5.4, best-effort forever) — but
     # the repo-level, unbounded count (used only by the reconciliation
     # script, never displayed) still sees the backfilled and undated rows.
@@ -80,7 +83,7 @@ async def test_counters_today_crosses_midnight_correctly(repo: Repo) -> None:
         is_backfill=False,
     )
 
-    counters = await counters_for(repo, XUID, 0, now)
+    counters = await counters_for(repo, XUID, now)
 
     assert counters.today == 2
     assert counters.today_score == 30

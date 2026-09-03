@@ -24,12 +24,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import Settings
 from bot.db.repo import AdminUserRow, Repo
 from bot.poller.fetcher import Fetcher
-from bot.services.stats import (
-    counters_for,
-    global_offset_minutes,
-    month_start_utc,
-    today_cutoff_utc,
-)
+from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
+from bot.services.tables import truncate_name
 from bot.util import humanize_ago
 
 log = logging.getLogger(__name__)
@@ -91,6 +87,12 @@ LIMIT_MAX = 50
 _LIMIT_LABELS = {
     "summary_top_limit": "Строк в /summary",
     "stats_games_limit": "Игр в /stats",
+    "hltb_recent_games_limit": "Игр-подсказок в /hltb",
+}
+_LIMIT_DEFAULTS = {
+    "summary_top_limit": "15",
+    "stats_games_limit": "15",
+    "hltb_recent_games_limit": "20",
 }
 
 
@@ -112,19 +114,12 @@ async def rare_menu(callback: CallbackQuery, repo: Repo) -> None:
 
 @router.callback_query(F.data == "a:limits")
 async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
-    summary_limit = await repo.get_app_setting("summary_top_limit", "15")
-    stats_limit = await repo.get_app_setting("stats_games_limit", "15")
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text=f"Строк в /summary: {summary_limit} ▸", callback_data="a:limit:summary_top_limit"
+    for key, label in _LIMIT_LABELS.items():
+        current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
+        builder.row(
+            InlineKeyboardButton(text=f"{label}: {current} ▸", callback_data=f"a:limit:{key}")
         )
-    )
-    builder.row(
-        InlineKeyboardButton(
-            text=f"Игр в /stats: {stats_limit} ▸", callback_data="a:limit:stats_games_limit"
-        )
-    )
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
         callback,
@@ -140,7 +135,7 @@ async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
     assert callback.data is not None
     key = callback.data.rsplit(":", 1)[1]
     label = _LIMIT_LABELS[key]
-    current = await repo.get_app_setting(key, "15")
+    current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
     _awaiting_input[callback.from_user.id] = key
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:limits"))
@@ -386,9 +381,8 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
     if not users:
         return "👥 Пока никто не подключился.", _back_home()
 
-    offset = await global_offset_minutes(repo)
     today = await repo.achievement_counts_by_xuid(today_cutoff_utc())
-    month = await repo.achievement_counts_by_xuid(month_start_utc(offset))
+    month = await repo.achievement_counts_by_xuid(month_cutoff_utc())
 
     pages = max(1, -(-len(users) // PAGE_SIZE))
     page = max(0, min(page, pages - 1))
@@ -399,7 +393,8 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
     for user in chunk:
         name = user.gamertag or f"id{user.tg_id}"
         lines.append(
-            f"{_icon(user)} {name:<14} {humanize_ago(user.last_online_at):<16} "
+            f"{_icon(user)} {truncate_name(name, 14):<14} "
+            f"{humanize_ago(user.last_online_at):<16} "
             f"{today.get(user.xuid, (0, 0))[0]} / {month.get(user.xuid, (0, 0))[0]}"
             f"{_note(user)}"
         )
@@ -425,10 +420,7 @@ async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     if user is None or not user.xuid:
         return "Пользователь не найден.", _back_home()
 
-    settings_row = await repo.get_user_settings(tg_id)
-    counters = await counters_for(
-        repo, user.xuid, settings_row.tz_offset_min if settings_row else None
-    )
+    counters = await counters_for(repo, user.xuid)
     token = await repo.get_token(tg_id)
     presence = await repo.presence_of(user.xuid)
     chats = await repo.chats_of_user(tg_id)

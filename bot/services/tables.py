@@ -14,6 +14,17 @@ from html import escape as html_escape
 
 Align = str  # "<" (left) or ">" (right)
 
+# A long name doesn't get cut off gracefully — it wraps the whole row onto a
+# second line on a phone screen, which breaks the "columns line up" promise
+# a monospace table exists for in the first place (found live: a game called
+# "Minecraft Legends - Windows" wrapped its "+G" cell onto its own line).
+# 20 keeps the widest realistic table (4-5 columns) inside a phone width.
+NAME_LIMIT = 20
+
+
+def truncate_name(name: str, limit: int = NAME_LIMIT) -> str:
+    return name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
+
 
 def render_table(headers: list[str], rows: list[list[str]], aligns: list[Align]) -> str:
     """A `<pre>` block with a header row, a divider and padded columns

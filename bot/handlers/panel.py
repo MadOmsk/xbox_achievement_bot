@@ -238,7 +238,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         return "👤 Панель\n\nВход: — не подключён", keyboard
 
     login = LOGIN_STATUS.get(token.status, "— не подключён") if token else "— не подключён"
-    counters = await counters_for(repo, user.xuid, tz_offset)
+    counters = await counters_for(repo, user.xuid)
     playing = await _now_playing(repo, user.xuid)
     recent = await repo.recent_achievements(user.xuid, RECENT_IN_PANEL)
 

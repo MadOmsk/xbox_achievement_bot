@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 router = Router(name="hltb")
 
 PAGE_SIZE = 5
-RECENT_GAMES_LIMIT = 10
+DEFAULT_RECENT_GAMES_LIMIT = "20"
 # Generous — the reply-to-message check is the real guard against a stray
 # match, this is just a backstop against sessions piling up forever.
 SESSION_TTL_SECONDS = 1800
@@ -46,7 +46,9 @@ SESSION_STALE = "Сессия устарела, начни заново — /hlt
 class _Session:
     asker_tg_id: int
     started_at: float
+    prompt_text: str = ""
     recent_games: list[str] = field(default_factory=list)
+    recent_page: int = 0
     results: list[HltbResult] = field(default_factory=list)
     page: int = 0
 
@@ -64,7 +66,8 @@ async def hltb_command(message: Message, repo: Repo) -> None:
         return
     # Only meaningful in a group: a DM's chat_id is the asker's own tg_id,
     # which never has subscriptions/chat_seen rows of its own.
-    recent = await repo.chat_recent_games(message.chat.id, RECENT_GAMES_LIMIT)
+    limit = await _recent_games_limit(repo)
+    recent = await repo.chat_recent_games(message.chat.id, limit)
 
     text = "Название игры? Точное не нужно — покажу варианты."
     if recent:
@@ -72,19 +75,62 @@ async def hltb_command(message: Message, repo: Repo) -> None:
     else:
         text += "\nОтветь на это сообщение (реплаем)."
 
-    prompt = await message.answer(text, reply_markup=_recent_keyboard(recent) if recent else None)
+    prompt = await message.answer(
+        text, reply_markup=_recent_keyboard(recent, 0) if recent else None
+    )
     _sessions[(message.chat.id, prompt.message_id)] = _Session(
-        asker_tg_id=message.from_user.id, started_at=time.monotonic(), recent_games=recent
+        asker_tg_id=message.from_user.id,
+        started_at=time.monotonic(),
+        prompt_text=text,
+        recent_games=recent,
     )
 
 
-def _recent_keyboard(names: list[str]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=name, callback_data=f"hltb:qr:{i}")]
-            for i, name in enumerate(names)
-        ]
-    )
+async def _recent_games_limit(repo: Repo) -> int:
+    raw = await repo.get_app_setting("hltb_recent_games_limit", DEFAULT_RECENT_GAMES_LIMIT)
+    try:
+        return int(raw or DEFAULT_RECENT_GAMES_LIMIT)
+    except ValueError:
+        return int(DEFAULT_RECENT_GAMES_LIMIT)
+
+
+def _nav_row(page: int, pages: int, page_prefix: str) -> list[InlineKeyboardButton]:
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{page_prefix}{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="hltb:noop"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{page_prefix}{page + 1}"))
+    return nav
+
+
+def _recent_keyboard(names: list[str], page: int) -> InlineKeyboardMarkup:
+    start = page * PAGE_SIZE
+    chunk = names[start : start + PAGE_SIZE]
+    rows = [
+        [InlineKeyboardButton(text=name, callback_data=f"hltb:qr:{start + i}")]
+        for i, name in enumerate(chunk)
+    ]
+    pages = -(-len(names) // PAGE_SIZE)
+    if pages > 1:
+        rows.append(_nav_row(page, pages, "hltb:rpage:"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("hltb:rpage:"))
+async def hltb_recent_page(callback: CallbackQuery, bot: Bot) -> None:
+    if not isinstance(callback.message, Message):
+        return
+    key = (callback.message.chat.id, callback.message.message_id)
+    session = _sessions.get(key)
+    if session is None or not _alive(session):
+        await callback.answer(SESSION_STALE, show_alert=True)
+        return
+    assert callback.data is not None
+    session.recent_page = int(callback.data.rsplit(":", 1)[1])
+    await callback.answer()
+    markup = _recent_keyboard(session.recent_games, session.recent_page)
+    await _edit(bot, key[0], key[1], session.prompt_text, markup)
 
 
 async def _is_awaited_reply(message: Message) -> bool:
@@ -160,13 +206,7 @@ def _results_keyboard(results: list[HltbResult], page: int) -> InlineKeyboardMar
 
     pages = -(-len(results) // PAGE_SIZE)
     if pages > 1:
-        nav = []
-        if page > 0:
-            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"hltb:page:{page - 1}"))
-        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="hltb:noop"))
-        if page < pages - 1:
-            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"hltb:page:{page + 1}"))
-        rows.append(nav)
+        rows.append(_nav_row(page, pages, "hltb:page:"))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

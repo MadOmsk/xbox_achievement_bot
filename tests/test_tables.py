@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bot.services.tables import render_table, total_line
+from bot.services.tables import render_table, total_line, truncate_name
 
 
 def test_columns_line_up_across_rows() -> None:
@@ -45,3 +45,17 @@ def test_total_line_is_bold_and_marked() -> None:
     line = total_line("Всего", "3 ачивки, +100 G")
     assert "<b>Всего:</b>" in line
     assert "3 ачивки, +100 G" in line
+
+
+def test_truncate_name_leaves_short_names_alone() -> None:
+    assert truncate_name("Igor") == "Igor"
+    assert truncate_name("A" * 20, limit=20) == "A" * 20  # exactly at the limit
+
+
+def test_truncate_name_cuts_and_marks_long_ones() -> None:
+    # "Minecraft Legends - Windows" wrapping onto a second line and breaking
+    # the whole table's alignment is the bug this exists to prevent.
+    truncated = truncate_name("Minecraft Legends - Windows", limit=20)
+    assert len(truncated) == 20
+    assert truncated.endswith("…")
+    assert truncated.startswith("Minecraft Legends")

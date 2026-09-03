@@ -30,13 +30,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, TopGame, User
 from bot.poller.daily import build_summary, current_rare_threshold, full_leaderboard
-from bot.services.achievements import (
-    platform_note,
-    plural_achievements,
-    rarity_badge,
-)
+from bot.services.achievements import plural_achievements, rarity_badge
 from bot.services.stats import counters_for, global_offset_minutes, local_now
-from bot.services.tables import render_table
+from bot.services.tables import render_table, truncate_name
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -171,7 +167,7 @@ def _games_table(games: list[TopGame]) -> str:
         [
             [
                 str(place),
-                game.name or "без названия",
+                truncate_name(game.name or "без названия"),
                 str(game.unlocked or 0),
                 f"+{thousands(game.gamerscore or 0)}",
             ]
@@ -189,10 +185,7 @@ async def _build_stats_text(
     if not target.xuid:
         return None
 
-    settings_row = await repo.get_user_settings(target.tg_id)
-    counters = await counters_for(
-        repo, target.xuid, settings_row.tz_offset_min if settings_row else None
-    )
+    counters = await counters_for(repo, target.xuid)
     lines = [
         f"📊 <b>{target.gamertag or 'без геймертега'}</b>  ·  "
         f"gamerscore {thousands(target.gamerscore or 0)}",
@@ -424,17 +417,28 @@ async def recent(message: Message, repo: Repo, command: CommandObject) -> None:
     if not rows:
         await message.answer("Пока пусто.")
         return
-    await message.answer("🕘 Последние ачивки\n\n" + "\n".join(_recent_line(r) for r in rows))
+    text = "🕘 <b>Последние ачивки</b>\n" + _recent_table(rows)
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-def _recent_line(row: RecentAchievement) -> str:
-    badge = rarity_badge(row.rarity_percent) or "·"
-    return (
-        f"{badge} {row.gamertag or 'кто-то'} — «{row.name}» · "
-        f"{row.game or 'без названия'} · {row.gamerscore} G"
-        f"{platform_note(row.platform, row.rarity_percent)} · "
-        f"{humanize_ago(row.unlocked_at)}"
+def _recent_table(rows: list[RecentAchievement]) -> str:
+    return render_table(
+        ["Игрок", "Ачивка", "Игра", "+G", "Когда"],
+        [_recent_row(row) for row in rows],
+        ["<", "<", "<", ">", "<"],
     )
+
+
+def _recent_row(row: RecentAchievement) -> list[str]:
+    badge = rarity_badge(row.rarity_percent)
+    name = f"{badge}{row.name}" if badge else row.name
+    return [
+        truncate_name(row.gamertag or "кто-то", 12),
+        truncate_name(name, 18),
+        truncate_name(row.game or "без названия", 14),
+        f"+{thousands(row.gamerscore)}",
+        humanize_ago(row.unlocked_at),
+    ]
 
 
 _UNKNOWN = (

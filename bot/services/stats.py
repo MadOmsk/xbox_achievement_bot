@@ -3,11 +3,15 @@
 Everything is counted from `seen_achievements.unlocked_at` regardless of
 `is_backfill`: that flag means "do not publish", not "did not happen".
 
-"Today" is a rolling 24 hours everywhere in the project, not a calendar day —
-the same reasoning as the chat summary's window (SPEC 5.7): a calendar
+Both "today" (24h) and "month" (30d) are rolling windows, not calendar-bound
+— the same reasoning as the chat summary's windows (SPEC 5.7): a calendar
 boundary cuts at an arbitrary moment, and people are in different timezones
-with no shared midnight anyway. "Month" is still calendar-based per person's
-own timezone; only the day boundary moved to rolling.
+with no shared midnight anyway. Month used to be calendar-based per person's
+timezone; that made it silently disagree with /stats' equally-30-day "Игры
+за 30 дней" table (found live: a chat member's games table showed a month's
+worth of games while "За месяц" showed three days' worth, because 30
+calendar-rolling days and "since the 1st" are not the same window) — fixed
+by making both counters and the games table use the same rolling window.
 """
 
 from __future__ import annotations
@@ -43,17 +47,18 @@ def today_cutoff_utc(now: datetime | None = None) -> datetime:
     return (now or utcnow()) - timedelta(hours=24)
 
 
-def month_start_utc(tz_offset_min: int | None, now: datetime | None = None) -> datetime:
-    local = local_now(tz_offset_min, now)
-    first = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return first - timedelta(minutes=tz_offset_min or 0)
+def month_cutoff_utc(now: datetime | None = None) -> datetime:
+    """Start of the rolling 30-day "month" window — same reasoning as
+    `today_cutoff_utc`, and deliberately the same window as /stats' "Игры
+    за 30 дней" table (SPEC 5.9): a mismatched window there is what made
+    this look like a counting bug rather than two different definitions of
+    "month"."""
+    return (now or utcnow()) - timedelta(days=30)
 
 
-async def counters_for(
-    repo: Repo, xuid: str, tz_offset_min: int | None, now: datetime | None = None
-) -> Counters:
+async def counters_for(repo: Repo, xuid: str, now: datetime | None = None) -> Counters:
     today, today_score = await repo.achievement_counts(xuid, today_cutoff_utc(now))
-    month, month_score = await repo.achievement_counts(xuid, month_start_utc(tz_offset_min, now))
+    month, month_score = await repo.achievement_counts(xuid, month_cutoff_utc(now))
     return Counters(today, today_score, month, month_score)
 
 

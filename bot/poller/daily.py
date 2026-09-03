@@ -18,7 +18,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
 from bot.services.stats import global_offset_minutes, local_now
-from bot.services.tables import render_table, total_line
+from bot.services.tables import render_table, total_line, truncate_name
 from bot.util import thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -178,7 +178,7 @@ def _section(rows: list[ChatMemberStat], limit: int) -> tuple[list[str], bool]:
 def _table_row(place: int, row: ChatMemberStat) -> list[str]:
     return [
         str(place),
-        row.gamertag or f"id{row.tg_id}",
+        truncate_name(row.gamertag or f"id{row.tg_id}"),
         str(row.count),
         f"+{thousands(row.score)}",
         str(row.rare) if row.rare else "",

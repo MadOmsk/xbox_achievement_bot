@@ -5,7 +5,13 @@ howlongtobeatpy calls themselves are out of scope for a unit test."""
 from __future__ import annotations
 
 from bot.db.repo import HltbCacheRow, Repo, TitleHistoryRow
-from bot.handlers.hltb import _card, _label, _results_keyboard
+from bot.handlers.hltb import (
+    _card,
+    _label,
+    _recent_games_limit,
+    _recent_keyboard,
+    _results_keyboard,
+)
 from bot.services.hltb import HltbResult, _clean, _from_cache_row
 
 CHAT_ID = -100777
@@ -89,6 +95,38 @@ def test_results_keyboard_has_no_nav_row_for_a_single_page() -> None:
     markup = _results_keyboard(results, 0)
     assert len(markup.inline_keyboard) == 3
     assert all(row[0].callback_data.startswith("hltb:pick:") for row in markup.inline_keyboard)
+
+
+def test_recent_keyboard_paginates_with_absolute_indices() -> None:
+    """Button indices must stay absolute across pages — hltb_recent_pick
+    looks games up by index into the *full* list, not the current page."""
+    names = [f"Game {i}" for i in range(12)]  # 3 pages of 5
+
+    page0 = _recent_keyboard(names, 0)
+    assert [row[0].callback_data for row in page0.inline_keyboard[:5]] == [
+        f"hltb:qr:{i}" for i in range(5)
+    ]
+    nav0 = page0.inline_keyboard[-1]
+    assert [b.callback_data for b in nav0] == ["hltb:noop", "hltb:rpage:1"]
+
+    page2 = _recent_keyboard(names, 2)
+    assert [row[0].callback_data for row in page2.inline_keyboard[:2]] == [
+        "hltb:qr:10",
+        "hltb:qr:11",
+    ]
+    nav2 = page2.inline_keyboard[-1]
+    assert [b.callback_data for b in nav2] == ["hltb:rpage:1", "hltb:noop"]
+
+
+def test_recent_keyboard_has_no_nav_row_for_a_single_page() -> None:
+    markup = _recent_keyboard(["A", "B"], 0)
+    assert len(markup.inline_keyboard) == 2
+
+
+async def test_recent_games_limit_is_admin_configurable(repo: Repo) -> None:
+    assert await _recent_games_limit(repo) == 20  # default
+    await repo.set_app_setting("hltb_recent_games_limit", "7")
+    assert await _recent_games_limit(repo) == 7
 
 
 async def test_hltb_cache_round_trip(repo: Repo) -> None:
