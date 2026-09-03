@@ -8,8 +8,9 @@ handler can forget it.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import BaseFilter, Command
 from aiogram.types import (
@@ -26,7 +27,7 @@ from bot.db.repo import AdminUserRow, Repo
 from bot.poller.fetcher import Fetcher
 from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 from bot.services.tables import truncate_name
-from bot.util import humanize_ago
+from bot.util import humanize_ago, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -341,6 +342,56 @@ async def chat_toggle_active(callback: CallbackQuery, repo: Repo) -> None:
     await _redraw(callback, *await _chat(repo, chat_id))
 
 
+WIPE_WINDOW_HOURS = 24
+
+
+@router.callback_query(F.data.startswith("a:cwipe:"))
+async def chat_wipe_prompt(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_chat(repo, chat_id)
+    if chat is None:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+    ids = await repo.bot_messages_since(chat_id, utcnow() - timedelta(hours=WIPE_WINDOW_HOURS))
+    if not ids:
+        await callback.answer("За последние 24 часа сообщений бота не нашёл.", show_alert=True)
+        return
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="Да, стереть", callback_data=f"a:cwipey:{chat_id}"))
+    builder.row(InlineKeyboardButton(text="Отмена", callback_data=f"a:chat:{chat_id}"))
+    await _redraw(
+        callback,
+        f"Стереть {len(ids)} сообщений бота в «{chat.title or chat_id}» "
+        f"за последние {WIPE_WINDOW_HOURS} часа?\n\n"
+        "Необратимо. Считаются только сообщения, отправленные с тех пор, как завели "
+        "этот учёт, — более старые бот не помнит.",
+        builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("a:cwipey:"))
+async def chat_wipe_confirm(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    ids = await repo.bot_messages_since(chat_id, utcnow() - timedelta(hours=WIPE_WINDOW_HOURS))
+
+    ok = True
+    for start in range(0, len(ids), 100):  # Bot API caps deleteMessages at 100 ids per call
+        try:
+            await bot.delete_messages(chat_id, ids[start : start + 100])
+        except Exception:
+            log.info("bulk delete failed for chat %s, chunk at %s", chat_id, start)
+            ok = False
+
+    # Forgotten either way: Telegram silently skips ids it can no longer
+    # delete (too old, already gone), and retrying those later would not
+    # help either — nothing left worth keeping the log row for.
+    await repo.forget_bot_messages(chat_id, ids)
+    await callback.answer("Готово." if ok else "Частично — что-то не далось стереть.")
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
 # ------------------------------------------------------------------- screens
 
 
@@ -522,6 +573,11 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         InlineKeyboardButton(
             text="⏸ Отключить чат" if chat.is_active else "▶️ Включить чат",
             callback_data=f"a:coff:{chat_id}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🧹 Стереть сообщения бота (24ч)", callback_data=f"a:cwipe:{chat_id}"
         )
     )
     builder.row(InlineKeyboardButton(text="‹ К списку", callback_data="a:chats"))

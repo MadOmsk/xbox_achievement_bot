@@ -33,6 +33,7 @@ from bot.poller.reminders import ReminderJob
 from bot.poller.scheduler import PollerScheduler
 from bot.services.connect import ConnectService
 from bot.services.crypto import TokenCipher
+from bot.services.message_log import MessageLogMiddleware
 from bot.services.notify import AdminNotifier
 from bot.services.xbox.auth import XboxAuthService, XboxIdentity
 from bot.services.xbox.client import XboxClient
@@ -72,6 +73,10 @@ async def run(settings: Settings) -> None:
         token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(link_preview_is_disabled=True),
     )
+    # Every group message the bot sends, logged for the admin panel's
+    # "стереть сообщения бота" (SPEC 6.4) — see the module docstring for why
+    # this is one request middleware and not a call in every handler.
+    bot.session.middleware(MessageLogMiddleware(repo))
 
     notifier = AdminNotifier(bot, repo, settings.admin_tg_ids)
     auth.on_token_dead = notifier.token_dead

@@ -989,6 +989,35 @@ class Repo:
         )
         await self._conn.commit()
 
+    async def log_bot_message(self, chat_id: int, message_id: int) -> None:
+        """Called from the request middleware (bot/services/message_log.py)
+        for every message the bot sends to a group — the only record that
+        lets the admin panel's "стереть сообщения бота" find anything to
+        delete (SPEC 6.4)."""
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO bot_messages (chat_id, message_id, sent_at) VALUES (?, ?, ?)",
+            (chat_id, message_id, utcnow_iso()),
+        )
+        await self._conn.commit()
+
+    async def bot_messages_since(self, chat_id: int, since: datetime) -> list[int]:
+        cursor = await self._conn.execute(
+            "SELECT message_id FROM bot_messages WHERE chat_id = ? AND sent_at >= ?",
+            (chat_id, _iso(since)),
+        )
+        return [row[0] for row in await cursor.fetchall()]
+
+    async def forget_bot_messages(self, chat_id: int, message_ids: Sequence[int]) -> None:
+        """Drops the log rows after an actual delete attempt — called
+        regardless of whether Telegram could delete every one of them (some
+        may already be gone), since there is nothing more to do about those
+        either way."""
+        await self._conn.executemany(
+            "DELETE FROM bot_messages WHERE chat_id = ? AND message_id = ?",
+            [(chat_id, message_id) for message_id in message_ids],
+        )
+        await self._conn.commit()
+
     # ----------------------------------------------------------------- admin
 
     async def admin_users(self) -> list[AdminUserRow]:
