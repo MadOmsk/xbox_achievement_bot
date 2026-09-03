@@ -16,7 +16,9 @@ Align = str  # "<" (left) or ">" (right)
 
 
 def render_table(headers: list[str], rows: list[list[str]], aligns: list[Align]) -> str:
-    """A `<pre>` block with a header row and padded columns.
+    """A `<pre>` block with a header row, a divider and padded columns
+    separated by a vertical bar — plain space-padded columns read as a run-on
+    string with nothing marking where one ends and the next begins.
 
     Escaped once, on the finished block, not cell by cell: an HTML entity like
     `&amp;` still occupies exactly one visual column once Telegram's parser
@@ -33,9 +35,10 @@ def render_table(headers: list[str], rows: list[list[str]], aligns: list[Align])
             cell.ljust(width) if align == "<" else cell.rjust(width)
             for cell, width, align in zip(cells, widths, aligns, strict=True)
         ]
-        return " ".join(parts).rstrip()
+        return " │ ".join(parts).rstrip()
 
-    lines = [render_row(headers), *(render_row(row) for row in rows)]
+    divider = "─┼─".join("─" * width for width in widths)
+    lines = [render_row(headers), divider, *(render_row(row) for row in rows)]
     return "<pre>" + html_escape("\n".join(lines)) + "</pre>"
 
 

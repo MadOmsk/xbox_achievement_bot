@@ -6,8 +6,8 @@ from bot.services.tables import render_table, total_line
 
 
 def test_columns_line_up_across_rows() -> None:
-    """Every line must be the same length, header included — that is the
-    entire point of a monospace table: same offset, every column, every row."""
+    """Every line must be the same length, header and divider included — that
+    is the entire point of a monospace table: same offset, every row."""
     table = render_table(
         ["Игрок", "Ач."],
         [["Igor", "1"], ["MadOmskLongName", "12"]],
@@ -15,8 +15,15 @@ def test_columns_line_up_across_rows() -> None:
     )
     body = table.removeprefix("<pre>").removesuffix("</pre>")
     lines = body.splitlines()
-    assert len(lines) == 3  # header + two rows
+    assert len(lines) == 4  # header + divider + two rows
     assert len({len(line) for line in lines}) == 1
+
+
+def test_vertical_bar_separates_columns() -> None:
+    """Plain space-padded columns read as a run-on string — nothing marks
+    where one column ends and the next begins."""
+    table = render_table(["A", "B"], [["1", "2"]], ["<", "<"])
+    assert "│" in table
 
 
 def test_html_is_escaped_after_padding_not_before() -> None:
@@ -29,7 +36,9 @@ def test_html_is_escaped_after_padding_not_before() -> None:
 
 
 def test_no_rows_still_renders_the_header() -> None:
-    assert render_table(["#", "Игрок"], [], ["<", "<"]) == "<pre># Игрок</pre>"
+    table = render_table(["#", "Игрок"], [], ["<", "<"])
+    assert table.startswith("<pre># │ Игрок\n")
+    assert table.endswith("</pre>")
 
 
 def test_total_line_is_bold_and_marked() -> None:
