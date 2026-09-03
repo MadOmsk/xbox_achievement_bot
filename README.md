@@ -14,6 +14,26 @@ Telegram-бот, который публикует ачивки Xbox участ�
 Python 3.12+, aiogram 3, xbox-webapi-python, httpx, aiohttp, aiosqlite,
 APScheduler, pydantic v2, cryptography (Fernet), howlongtobeatpy.
 
+## Что нужно до старта
+
+Без этих трёх вещей бот не запустится или не сможет пускать людей через
+Xbox-логин — готовятся один раз, до первого запуска:
+
+1. **Токен Telegram-бота** — создать у [@BotFather](https://t.me/BotFather),
+   получить `BOT_TOKEN`.
+2. **Регистрация приложения на [portal.azure.com](https://portal.azure.com)
+   — обязательна**, без неё Xbox-логин не работает вообще. Нужны:
+   scope `XboxLive.signin XboxLive.offline_access`, redirect URI — тот же
+   адрес, что в `OAUTH_REDIRECT_URL` (см. пункт 3), из регистрации берутся
+   `AZURE_CLIENT_ID` и `AZURE_CLIENT_SECRET`.
+3. **Домен с HTTPS**, куда указывает `OAUTH_REDIRECT_URL` (например
+   `https://ваш-домен/auth/callback`). Microsoft принимает в качестве
+   redirect URI только `https://`-адрес — ни `localhost`, ни голый `http://`
+   не подходят. Для локальной разработки — свой домен на туннеле вроде
+   Cloudflare Tunnel (даёт `https://` сразу); в проде — обычный домен с
+   сертификатом (nginx + Let's Encrypt/certbot, как на боевом сервере этого
+   проекта).
+
 ## Локальная разработка
 
 ```bash
@@ -26,18 +46,11 @@ copy .env.example .env
 # заполнить BOT_TOKEN, AZURE_CLIENT_ID/SECRET, OAUTH_REDIRECT_URL, FERNET_KEY
 ```
 
-`BOT_TOKEN` — у [@BotFather](https://t.me/BotFather). `AZURE_CLIENT_ID` /
-`AZURE_CLIENT_SECRET` — регистрация приложения на
-[portal.azure.com](https://portal.azure.com), scope `XboxLive.signin
-XboxLive.offline_access`, redirect URI должен совпадать с
-`OAUTH_REDIRECT_URL`. `FERNET_KEY` — сгенерировать:
+`FERNET_KEY` — сгенерировать:
 
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
-
-Для колбэка OAuth локально нужен внешний адрес (домен или туннель вроде
-Cloudflare Tunnel) — Microsoft не пускает `localhost` в redirect URI.
 
 Дальше процессом на своей машине управляет `manage.ps1` (бот сам себя
 запустить не может):
