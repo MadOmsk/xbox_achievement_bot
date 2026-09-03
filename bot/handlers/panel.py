@@ -18,9 +18,10 @@ from bot.handlers.keyboards import (
     DIGEST_NEVER,
     deep_link_keyboard,
     digest_keyboard,
+    disconnect_prompt_keyboard,
     format_offset,
+    next_rarity_mode,
     panel_keyboard,
-    rarity_keyboard,
     timezone_keyboard,
 )
 from bot.poller.fetcher import Fetcher
@@ -122,27 +123,14 @@ async def panel_sync(
 
 
 @router.callback_query(F.data == "panel:rarity")
-async def panel_rarity_menu(callback: CallbackQuery, repo: Repo) -> None:
+async def panel_rarity_cycle(callback: CallbackQuery, repo: Repo) -> None:
     """Three modes for One/Series/PC, mirroring the show/hide switch below it
-    for Xbox 360 — the threshold itself stays the admin's (SPEC 1.4)."""
+    for Xbox 360 — the threshold itself stays the admin's (SPEC 1.4). One tap
+    advances to the next mode, the same interaction as the x360 toggle."""
     settings_row = await repo.get_user_settings(callback.from_user.id)
     current = settings_row.rarity_mode if settings_row else "all"
-    threshold = await repo.get_app_setting("rare_threshold_percent", "10")
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                "One/Series/PC — что показывать в чате",
-                reply_markup=rarity_keyboard(current, threshold or "10"),
-            )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("panel:rarity:"))
-async def panel_rarity_set(callback: CallbackQuery, repo: Repo) -> None:
-    assert callback.data is not None
-    mode = callback.data.rsplit(":", 1)[1]
+    mode = next_rarity_mode(current)
     await repo.update_user_settings(callback.from_user.id, rarity_mode=mode)
-    await callback.answer()
     await _redraw(callback, repo)
 
 
@@ -178,6 +166,31 @@ async def panel_digest_set(callback: CallbackQuery, repo: Repo) -> None:
     await _redraw(callback, repo)
 
 
+@router.callback_query(F.data == "panel:disconnect")
+async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
+    """Same confirmation as /disconnect — the actual disconnect handlers
+    (disconnect:yes / disconnect:no in connect.py) just edit whatever message
+    triggered them, so they work unchanged from the panel too."""
+    from bot.handlers.connect import REVOKE_URL
+
+    user = await repo.get_user(callback.from_user.id)
+    if user is None or not user.xuid:
+        await callback.answer("Xbox и так не подключён.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(
+                "Отключить Xbox?\n\n"
+                "Удалю токен и подписки. Историю ачивок оставлю — она нужна статистике "
+                "чата, и при повторном входе старые ачивки не хлынут в чат заново.\n\n"
+                f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно "
+                f"только самому: {REVOKE_URL}",
+                reply_markup=disconnect_prompt_keyboard(),
+                disable_web_page_preview=True,
+            )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "panel:tz")
 async def panel_timezone(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
@@ -188,11 +201,17 @@ async def panel_timezone(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+RECENT_IN_PANEL = 5
+
+
 async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     user = await repo.get_user(tg_id)
     settings_row = await repo.get_user_settings(tg_id)
     threshold = await repo.get_app_setting("rare_threshold_percent", "10")
+    connected = user is not None and bool(user.xuid)
 
+    token = await repo.get_token(tg_id) if connected else None
+    needs_reconnect = token is not None and token.status == "invalid"
     tz_offset = settings_row.tz_offset_min if settings_row else None
     keyboard = panel_keyboard(
         tz_offset,
@@ -200,29 +219,24 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         threshold or "10",
         settings_row.show_x360 if settings_row else True,
         settings_row.digest_threshold if settings_row else 3,
+        connected=connected,
+        needs_reconnect=needs_reconnect,
     )
 
     if user is None or not user.xuid:
-        return (
-            "👤 Панель\n\nВход: — не подключён\n\nПодключить: /connect",
-            keyboard,
-        )
+        return "👤 Панель\n\nВход: — не подключён", keyboard
 
-    token = await repo.get_token(tg_id)
     login = LOGIN_STATUS.get(token.status, "— не подключён") if token else "— не подключён"
     counters = await counters_for(repo, user.xuid, tz_offset)
-    last = await repo.last_achievement(user.xuid)
+    playing = await _now_playing(repo, user.xuid)
+    recent = await repo.recent_achievements(user.xuid, RECENT_IN_PANEL)
 
     lines = [
         f"👤 {user.gamertag or 'без геймертега'}  ·  gamerscore {thousands(user.gamerscore or 0)}",
         "",
         f"Вход:        {login}",
         f"Публикация:  {await _publication_status(repo, user.tg_id, user.is_excluded)}",
-    ]
-    if last is not None:
-        game = last.title_name or "неизвестная игра"
-        lines.append(f"Последняя:   «{last.name}» — {game}, {humanize_ago(last.unlocked_at)}")
-    lines += [
+        f"Сейчас:      {playing}",
         "",
         f"Сегодня:     {plural_achievements(counters.today)} (+{counters.today_score} G)",
         f"За месяц:    {plural_achievements(counters.month)} "
@@ -231,9 +245,30 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         "",
         f"Часовой пояс: {format_offset(tz_offset)}",
     ]
-    if token is not None and token.status == "invalid":
-        lines += ["", "Доступ к Xbox истёк — войди заново: /connect"]
+    if needs_reconnect:
+        lines += ["", "Доступ к Xbox истёк — жми «Подключить заново» ниже."]
+    if recent:
+        lines += ["", "Последние ачивки:"]
+        lines += [
+            f"🏆 «{item.name}» — {item.title_name or 'неизвестная игра'}, "
+            f"{humanize_ago(item.unlocked_at)}"
+            for item in recent
+        ]
     return "\n".join(lines), keyboard
+
+
+async def _now_playing(repo: Repo, xuid: str) -> str:
+    presence = await repo.presence_of(xuid)
+    if presence is None:
+        return "нет данных"
+    if presence.state != "Online":
+        return f"не в сети ({humanize_ago(presence.updated_at)})"
+    if not presence.title_id:
+        return "в сети, не играет"
+    # Presence gives no name for PC titles — fall back to the cache the
+    # poller fills (SPEC 4), same as the admin card.
+    game = presence.title_name or await repo.title_name(presence.title_id) or presence.title_id
+    return f"играет — {game}"
 
 
 async def _publication_status(repo: Repo, tg_id: int, is_excluded: bool) -> str:

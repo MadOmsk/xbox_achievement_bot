@@ -544,29 +544,35 @@ class Repo:
         return new_rows
 
     async def last_achievement(self, xuid: str) -> AchievementRow | None:
-        """The most recent unlock, for the panel. Undated rows never win."""
+        """The most recent unlock. Undated rows never win."""
+        rows = await self.recent_achievements(xuid, limit=1)
+        return rows[0] if rows else None
+
+    async def recent_achievements(self, xuid: str, limit: int = 5) -> list[AchievementRow]:
+        """The last N unlocks, newest first — for the panel (SPEC 6.2).
+        Undated rows never win: an unknown unlock time is not "recent"."""
         cursor = await self._conn.execute(
             "SELECT s.*, t.name AS game FROM seen_achievements s "
             "LEFT JOIN titles t ON t.title_id = s.title_id "
             "WHERE s.xuid = ? AND s.unlocked_at IS NOT NULL "
-            "ORDER BY s.unlocked_at DESC LIMIT 1",
-            (xuid,),
+            "ORDER BY s.unlocked_at DESC LIMIT ?",
+            (xuid, limit),
         )
-        row = await cursor.fetchone()
-        if row is None:
-            return None
-        return AchievementRow(
-            title_id=row["title_id"],
-            achievement_id=row["achievement_id"],
-            name=row["name"],
-            description=row["description"],
-            icon_url=row["icon_url"],
-            unlocked_at=row["unlocked_at"],
-            gamerscore=row["gamerscore"],
-            rarity_percent=row["rarity_percent"],
-            platform=row["platform"],
-            title_name=row["game"],
-        )
+        return [
+            AchievementRow(
+                title_id=row["title_id"],
+                achievement_id=row["achievement_id"],
+                name=row["name"],
+                description=row["description"],
+                icon_url=row["icon_url"],
+                unlocked_at=row["unlocked_at"],
+                gamerscore=row["gamerscore"],
+                rarity_percent=row["rarity_percent"],
+                platform=row["platform"],
+                title_name=row["game"],
+            )
+            for row in await cursor.fetchall()
+        ]
 
     async def has_any_achievements(self, xuid: str) -> bool:
         cursor = await self._conn.execute(

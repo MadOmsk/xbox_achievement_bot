@@ -59,6 +59,8 @@ def format_digest(threshold: int) -> str:
 
 # The One/Series/PC counterpart of the Xbox 360 switch below it: same three
 # choices in spirit — show everything, show only the rare ones, or nothing.
+# A click cycles to the next one, same interaction as the x360 button, rather
+# than opening a submenu — one tap, not two, for a three-way toggle.
 RARITY_CHOICES = ("all", "rare", "hidden")
 
 
@@ -70,16 +72,18 @@ def format_rarity(mode: str, threshold: str | float) -> str:
     return "любые"
 
 
-def rarity_keyboard(current: str, threshold: str | float) -> InlineKeyboardMarkup:
-    labels = {"all": "Любые", "rare": f"Только редкие (≤ {threshold}%)", "hidden": "Не показывать"}
-    builder = InlineKeyboardBuilder()
-    for mode in RARITY_CHOICES:
-        mark = "• " if mode == current else ""
-        builder.row(
-            InlineKeyboardButton(text=f"{mark}{labels[mode]}", callback_data=f"panel:rarity:{mode}")
-        )
-    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="panel:refresh"))
-    return builder.as_markup()
+def next_rarity_mode(current: str) -> str:
+    index = RARITY_CHOICES.index(current) if current in RARITY_CHOICES else 0
+    return RARITY_CHOICES[(index + 1) % len(RARITY_CHOICES)]
+
+
+def disconnect_prompt_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, отключить", callback_data="disconnect:yes")],
+            [InlineKeyboardButton(text="Отмена", callback_data="disconnect:no")],
+        ]
+    )
 
 
 def panel_keyboard(
@@ -88,37 +92,52 @@ def panel_keyboard(
     rare_threshold: str | float = 10,
     show_x360: bool = True,
     digest_threshold: int = 3,
+    *,
+    connected: bool = True,
+    needs_reconnect: bool = False,
 ) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"One/Series/PC: {format_rarity(rarity_mode, rare_threshold)} ▸",
-                    callback_data="panel:rarity",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Xbox 360: {'показывать' if show_x360 else 'не показывать'}",
-                    callback_data="panel:x360",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Сводка: {format_digest(digest_threshold)} ▸",
-                    callback_data="panel:digest",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Часовой пояс: {format_offset(tz_offset_min)} ▸",
-                    callback_data="panel:tz",
-                )
-            ],
-            [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
-            [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
-        ]
-    )
+    if not connected:
+        # Nothing else on the panel means anything before there is an account
+        # to apply it to.
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 Подключить Xbox", callback_data="relogin")]
+            ]
+        )
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if needs_reconnect:
+        rows.append([InlineKeyboardButton(text="🔄 Подключить заново", callback_data="relogin")])
+    rows += [
+        [
+            InlineKeyboardButton(
+                text=f"One/Series/PC: {format_rarity(rarity_mode, rare_threshold)}",
+                callback_data="panel:rarity",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Xbox 360: {'показывать' if show_x360 else 'не показывать'}",
+                callback_data="panel:x360",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Сводка: {format_digest(digest_threshold)} ▸",
+                callback_data="panel:digest",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"Часовой пояс: {format_offset(tz_offset_min)} ▸",
+                callback_data="panel:tz",
+            )
+        ],
+        [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
+        [InlineKeyboardButton(text="🔕 Отключить Xbox", callback_data="panel:disconnect")],
+        [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def digest_keyboard(current: int) -> InlineKeyboardMarkup:

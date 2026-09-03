@@ -96,3 +96,22 @@ async def test_counts_by_xuid_covers_everyone_in_one_query(repo: Repo) -> None:
 
     assert counts[XUID] == (1, 10)
     assert counts["other"] == (1, 25)
+
+
+async def test_recent_achievements_orders_newest_first_and_respects_limit(
+    repo: Repo,
+) -> None:
+    await repo.insert_new_achievements(
+        XUID,
+        [
+            row("first", "2026-09-01T10:00:00+00:00"),
+            row("second", "2026-09-02T10:00:00+00:00"),
+            row("third", "2026-09-03T10:00:00+00:00"),
+            row("undated", None),  # never wins a "recent" slot
+        ],
+        is_backfill=False,
+    )
+
+    recent = await repo.recent_achievements(XUID, limit=2)
+
+    assert [item.achievement_id for item in recent] == ["third", "second"]
