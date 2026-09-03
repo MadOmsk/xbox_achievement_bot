@@ -259,12 +259,15 @@ def _card(result: HltbResult) -> str:
     title = f"⏱ <b>{result.name}</b>"
     if result.release_year:
         title += f" ({result.release_year})"
-    return (
-        f"{title}\n\n"
-        f"Основной сюжет:     {fmt(result.main_hours)}\n"
-        f"Основной + доп.:    {fmt(result.extra_hours)}\n"
-        f"Полное прохождение: {fmt(result.completionist_hours)}"
-    )
+    lines = [
+        f"{title}\n",
+        f"Основной сюжет:     {fmt(result.main_hours)}",
+        f"Основной + доп.:    {fmt(result.extra_hours)}",
+        f"Полное прохождение: {fmt(result.completionist_hours)}",
+    ]
+    if result.platforms:
+        lines += ["", f"Платформы: {', '.join(result.platforms)}"]
+    return "\n".join(lines)
 
 
 async def _edit(

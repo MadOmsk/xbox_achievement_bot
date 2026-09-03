@@ -31,6 +31,7 @@ class HltbResult:
     main_hours: float | None
     extra_hours: float | None
     completionist_hours: float | None
+    platforms: list[str]
 
 
 async def search(query: str) -> list[HltbResult]:
@@ -69,6 +70,7 @@ async def resolve(repo: Repo, hltb_id: int) -> HltbResult:
             main_hours=result.main_hours,
             extra_hours=result.extra_hours,
             completionist_hours=result.completionist_hours,
+            platforms=result.platforms,
         )
     )
     return result
@@ -82,6 +84,7 @@ def _as_result(entry: object) -> HltbResult:
         main_hours=_clean(entry.main_story),  # type: ignore[attr-defined]
         extra_hours=_clean(entry.main_extra),  # type: ignore[attr-defined]
         completionist_hours=_clean(entry.completionist),  # type: ignore[attr-defined]
+        platforms=list(entry.profile_platforms or []),  # type: ignore[attr-defined]
     )
 
 
@@ -93,6 +96,7 @@ def _from_cache_row(row: HltbCacheRow) -> HltbResult:
         main_hours=row.main_hours,
         extra_hours=row.extra_hours,
         completionist_hours=row.completionist_hours,
+        platforms=row.platforms,
     )
 
 

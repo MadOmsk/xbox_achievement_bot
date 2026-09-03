@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS hltb_cache (
     main_hours          REAL,
     extra_hours         REAL,
     completionist_hours REAL,
+    platforms           TEXT NOT NULL DEFAULT '[]',  -- JSON list, HLTB's profile_platforms
     cached_at           TEXT NOT NULL
 );
 

@@ -25,6 +25,7 @@ def result(hltb_id: int = 1, year: int | None = 2021) -> HltbResult:
         main_hours=11.3,
         extra_hours=19.5,
         completionist_hours=29.2,
+        platforms=["PC", "Xbox Series X/S"],
     )
 
 
@@ -43,10 +44,12 @@ def test_from_cache_row_round_trips() -> None:
         main_hours=5.0,
         extra_hours=None,
         completionist_hours=15.0,
+        platforms=["PS5"],
     )
     r = _from_cache_row(row)
     assert (r.hltb_id, r.name, r.release_year) == (42, "A Game", 2020)
     assert (r.main_hours, r.extra_hours, r.completionist_hours) == (5.0, None, 15.0)
+    assert r.platforms == ["PS5"]
 
 
 def test_label_includes_year_when_known() -> None:
@@ -62,11 +65,18 @@ def test_card_shows_a_dash_for_missing_completion_times() -> None:
         main_hours=None,
         extra_hours=None,
         completionist_hours=None,
+        platforms=[],
     )
     text = _card(incomplete)
     assert "Coop Only" in text
     assert "—" in text
     assert "None" not in text
+    assert "Платформы" not in text  # nothing to show — no empty line either
+
+
+def test_card_lists_platforms_when_known() -> None:
+    text = _card(result())
+    assert "Платформы: PC, Xbox Series X/S" in text
 
 
 def test_results_keyboard_paginates_five_per_page_with_nav() -> None:
