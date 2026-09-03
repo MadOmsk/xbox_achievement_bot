@@ -97,7 +97,7 @@ class OAuthServer:
             return _page("Не получилось", str(exc), status=400)
         except TokenRefreshError:
             log.exception("token exchange failed")
-            return _page("Microsoft не отдал токен", "Попробуй ещё раз: /connect", status=502)
+            return _page("Microsoft не отдал токен", "Попробуй ещё раз: /connect_xbox", status=502)
 
         try:
             await self._on_linked(tg_id, identity, origin_chat_id)

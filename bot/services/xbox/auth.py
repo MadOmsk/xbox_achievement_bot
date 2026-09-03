@@ -44,7 +44,7 @@ class TokenRefreshError(Exception):
 class TokenDeadError(TokenRefreshError):
     """Microsoft refused the refresh token: consent revoked, password changed,
     token expired or account blocked. Indistinguishable from each other and
-    cured the same way — a new /connect (SPEC 5.1.2)."""
+    cured the same way — a new /connect_xbox (SPEC 5.1.2)."""
 
 
 @dataclass(slots=True)

@@ -1,4 +1,4 @@
-"""Orchestration of the /connect flow, shared by the handler and the web callback."""
+"""Orchestration of the /connect_xbox flow, shared by the handler and the web callback."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class ConnectService:
         pending = self._pending.pop(state, None)
         if pending is None:
             # Unknown or expired state — also what a forged callback looks like.
-            raise ConnectError("Ссылка устарела. Начни заново: /connect")
+            raise ConnectError("Ссылка устарела. Начни заново: /connect_xbox")
 
         identity = await self._auth.exchange_code(code)
 

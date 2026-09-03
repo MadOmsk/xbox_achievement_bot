@@ -123,7 +123,7 @@ async def subscribe(message: Message, repo: Repo) -> None:
 
 @router.message(Command("unsubscribe"))
 async def unsubscribe(message: Message, repo: Repo) -> None:
-    """Same weight as /disconnect: losing your feed in a chat you might not
+    """Same weight as /disconnect_xbox: losing your feed in a chat you might not
     remember subscribing in deserves a confirm, not an instant action."""
     if message.chat.type not in GROUP_TYPES or message.from_user is None:
         return

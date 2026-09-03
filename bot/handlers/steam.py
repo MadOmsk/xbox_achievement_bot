@@ -5,7 +5,7 @@ published yet. Deliberately the smallest working slice: a person can link
 and unlink a Steam profile, the bot resolves and remembers it, and that is
 the whole of this step.
 
-Private chat only, like /connect and /panel — this is personal, not a group
+Private chat only, like /connect_xbox and /panel — this is personal, not a group
 setting (SPEC 6.3's "настройки в общий чат не попадают никогда" applies the
 same way here). Found live: an earlier version filtered group chat out at
 the router level with no reply at all — from inside a group that reads as

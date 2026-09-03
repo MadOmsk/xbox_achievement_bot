@@ -84,7 +84,7 @@ async def panel_sync(
     tg_id = callback.from_user.id
     user = await repo.get_user(tg_id)
     if user is None or not user.xuid:
-        await callback.answer("Сначала подключи Xbox: /connect", show_alert=True)
+        await callback.answer("Сначала подключи Xbox: /connect_xbox", show_alert=True)
         return
 
     minutes_left = cooldown_minutes_left(
@@ -168,7 +168,7 @@ async def panel_digest_set(callback: CallbackQuery, repo: Repo) -> None:
 
 @router.callback_query(F.data == "panel:disconnect")
 async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
-    """Same confirmation as /disconnect — the actual disconnect handlers
+    """Same confirmation as /disconnect_xbox — the actual disconnect handlers
     (disconnect:yes / disconnect:no in connect.py) just edit whatever message
     triggered them, so they work unchanged from the panel too."""
     from bot.handlers.connect import REVOKE_URL
@@ -220,6 +220,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     settings_row = await repo.get_user_settings(tg_id)
     threshold = await repo.get_app_setting("rare_threshold_percent", "10")
     connected = user is not None and bool(user.xuid)
+    steam_link = await repo.get_platform_link(tg_id, "steam")
 
     token = await repo.get_token(tg_id) if connected else None
     needs_reconnect = token is not None and token.status == "invalid"
@@ -235,7 +236,10 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     )
 
     if user is None or not user.xuid:
-        return "👤 Панель\n\nВход: — не подключён", keyboard
+        text = "👤 Панель\n\nВход Xbox: — не подключён"
+        if steam_link is not None:
+            text += f"\nВход Steam: {steam_link.display_name}"
+        return text, keyboard
 
     login = LOGIN_STATUS.get(token.status, "— не подключён") if token else "— не подключён"
     counters = await counters_for(repo, user.xuid)
@@ -245,7 +249,13 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     lines = [
         f"👤 {user.gamertag or 'без геймертега'}  ·  gamerscore {thousands(user.gamerscore or 0)}",
         "",
-        f"Вход:        {login}",
+        f"Вход Xbox:   {login}",
+    ]
+    # Only when linked — this step doesn't poll or publish Steam achievements
+    # yet (M-Steam-1, TODO.md), so there's nothing else Steam-related to show.
+    if steam_link is not None:
+        lines.append(f"Вход Steam:  {steam_link.display_name}")
+    lines += [
         f"Публикация:  {await _publication_status(repo, user.tg_id, user.is_excluded)}",
         f"Сейчас:      {playing}",
         "",

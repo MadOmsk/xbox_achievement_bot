@@ -1,4 +1,4 @@
-"""/start, /connect, /disconnect and the timezone picker. UI only (CLAUDE.md)."""
+"""/start, /connect_xbox, /disconnect_xbox and the timezone picker. UI only (CLAUDE.md)."""
 
 from __future__ import annotations
 
@@ -75,17 +75,19 @@ async def start(message: Message, repo: Repo, connect: ConnectService) -> None:
     await _greet(message, repo, connect)
 
 
-@router.message(Command("connect"))
+@router.message(Command("connect_xbox"))
 async def connect_command(message: Message, repo: Repo, connect: ConnectService) -> None:
     await repo.ensure_user(message.chat.id, _username(message))
     user = await repo.get_user(message.chat.id)
     if user is not None and user.xuid:
-        await message.answer("Xbox уже подключён. Если нужно войти заново — сначала /disconnect.")
+        await message.answer(
+            "Xbox уже подключён. Если нужно войти заново — сначала /disconnect_xbox."
+        )
         return
     await _send_login_link(message, connect)
 
 
-@router.message(Command("disconnect"))
+@router.message(Command("disconnect_xbox"))
 async def disconnect_command(message: Message, repo: Repo) -> None:
     user = await repo.get_user(message.chat.id)
     if user is None or not user.xuid:
@@ -129,11 +131,11 @@ async def disconnect_confirm(callback: CallbackQuery, repo: Repo, notifier: Admi
     await repo.delete_token(tg_id)
     await repo.delete_subscriptions_of_user(tg_id)
     await repo.unlink_xbox_account(tg_id)
-    await notifier.user_disconnected(tg_id, gamertag, "сам через /disconnect")
+    await notifier.user_disconnected(tg_id, gamertag, "сам через /disconnect_xbox")
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "Отключил. Вернуться можно в любой момент — /connect.\n\n"
+            "Отключил. Вернуться можно в любой момент — /connect_xbox.\n\n"
             f"Разрешение в аккаунте Microsoft убирается тут: {REVOKE_URL}",
             disable_web_page_preview=True,
         )
@@ -165,7 +167,7 @@ async def optout(callback: CallbackQuery, repo: Repo, notifier: AdminNotifier) -
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             "Хорошо, больше не напоминаю. Историю ачивок сохранил — "
-            "вернуться можно в любой момент через /connect."
+            "вернуться можно в любой момент через /connect_xbox."
         )
     await callback.answer()
 

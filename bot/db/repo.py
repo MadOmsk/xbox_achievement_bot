@@ -321,7 +321,7 @@ class Repo:
         await self._conn.commit()
 
     async def unlink_xbox_account(self, tg_id: int) -> None:
-        """/disconnect: the link goes, seen_achievements and history stay (SPEC 6.1)."""
+        """/disconnect_xbox: the link goes, seen_achievements and history stay (SPEC 6.1)."""
         await self._conn.execute(
             "UPDATE users SET xuid = NULL, updated_at = ? WHERE tg_id = ?",
             (utcnow_iso(), tg_id),

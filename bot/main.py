@@ -100,7 +100,7 @@ async def run(settings: Settings) -> None:
             await bot.send_message(
                 tg_id,
                 "Не смог перечитать твою историю ачивок. Публикация пока выключена, "
-                "чтобы не завалить чат — напиши /connect ещё раз чуть позже.",
+                "чтобы не завалить чат — напиши /connect_xbox ещё раз чуть позже.",
             )
             return
         await bot.send_message(
@@ -221,14 +221,15 @@ async def _publish_command_menu(bot: Bot) -> None:
     """The command list Telegram shows behind the "/" button.
 
     Two scopes, because the useful commands differ: in a group nobody needs
-    /connect, and in private nobody needs /online. Most-used first in both —
-    subscribe/unsubscribe is one-time setup, not read every time (SPEC 6.3).
+    /connect_xbox, and in private nobody needs /online. Most-used first in
+    both — subscribe/unsubscribe is one-time setup, not read every time
+    (SPEC 6.3).
     """
     private = [
         BotCommand(command="panel", description="Моя панель и настройки"),
         BotCommand(command="stats", description="Моя статистика"),
-        BotCommand(command="connect", description="Подключить Xbox"),
-        BotCommand(command="disconnect", description="Отключить Xbox"),
+        BotCommand(command="connect_xbox", description="Подключить Xbox"),
+        BotCommand(command="disconnect_xbox", description="Отключить Xbox"),
         BotCommand(command="connect_steam", description="Подключить Steam"),
         BotCommand(command="disconnect_steam", description="Отключить Steam"),
         BotCommand(command="hltb", description="Сколько идти игру (HowLongToBeat)"),
