@@ -103,10 +103,27 @@ class ChatTarget:
     rarity_mode: str
     min_gamerscore: int
     muted_title_ids: list[str]
+    # NULL = no override, follow the matching app_settings default (SPEC 5.5,
+    # 5.7) — raw, unresolved values; callers resolve against the global
+    # default themselves, same as everywhere else a setting can be NULL.
+    rare_threshold_percent: float | None = None
+    daily_summary_time: str | None = None
+    timezone: str | None = None
     # Filled in by the admin panel only; the publisher never looks at them.
     is_active: bool = True
     daily_summary: bool = True
     subscribers: int = 0
+
+
+@dataclass(slots=True)
+class ChatOverride:
+    """The same three per-chat overrides as on `ChatTarget`, fetched alone
+    for call sites (chat.py's /summary) that have a chat_id but no reason to
+    pull the rest of the chat/subscriber JOIN."""
+
+    rare_threshold_percent: float | None
+    daily_summary_time: str | None
+    timezone: str | None
 
 
 @dataclass(slots=True)
@@ -684,7 +701,8 @@ class Repo:
 
     async def publication_targets(self, tg_id: int) -> list[ChatTarget]:
         cursor = await self._conn.execute(
-            "SELECT c.chat_id, c.title, s.rarity_mode, s.min_gamerscore, s.muted_title_ids "
+            "SELECT c.chat_id, c.title, s.rarity_mode, s.min_gamerscore, s.muted_title_ids,"
+            "       s.rare_threshold_percent "
             "FROM subscriptions sub "
             "JOIN chats c ON c.chat_id = sub.chat_id "
             "JOIN chat_settings s ON s.chat_id = c.chat_id "
@@ -698,9 +716,25 @@ class Repo:
                 rarity_mode=row["rarity_mode"],
                 min_gamerscore=row["min_gamerscore"],
                 muted_title_ids=json.loads(row["muted_title_ids"] or "[]"),
+                rare_threshold_percent=row["rare_threshold_percent"],
             )
             for row in await cursor.fetchall()
         ]
+
+    async def get_chat_overrides(self, chat_id: int) -> ChatOverride:
+        cursor = await self._conn.execute(
+            "SELECT rare_threshold_percent, daily_summary_time, timezone "
+            "FROM chat_settings WHERE chat_id = ?",
+            (chat_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return ChatOverride(None, None, None)
+        return ChatOverride(
+            rare_threshold_percent=row["rare_threshold_percent"],
+            daily_summary_time=row["daily_summary_time"],
+            timezone=row["timezone"],
+        )
 
     # --------------------------------------------------------- title history
 
@@ -1071,7 +1105,8 @@ class Repo:
     async def admin_chats(self) -> list[ChatTarget]:
         cursor = await self._conn.execute(
             "SELECT c.chat_id, c.title, c.is_active, s.rarity_mode, s.min_gamerscore,"
-            "       s.daily_summary, s.muted_title_ids,"
+            "       s.daily_summary, s.muted_title_ids, s.rare_threshold_percent,"
+            "       s.daily_summary_time, s.timezone,"
             "       (SELECT COUNT(*) FROM subscriptions WHERE chat_id = c.chat_id) AS subs "
             "FROM chats c JOIN chat_settings s ON s.chat_id = c.chat_id "
             "ORDER BY c.is_active DESC, c.title"
@@ -1083,6 +1118,9 @@ class Repo:
                 rarity_mode=row["rarity_mode"],
                 min_gamerscore=row["min_gamerscore"],
                 muted_title_ids=json.loads(row["muted_title_ids"] or "[]"),
+                rare_threshold_percent=row["rare_threshold_percent"],
+                daily_summary_time=row["daily_summary_time"],
+                timezone=row["timezone"],
                 is_active=bool(row["is_active"]),
                 daily_summary=bool(row["daily_summary"]),
                 subscribers=int(row["subs"]),
@@ -1091,7 +1129,14 @@ class Repo:
         ]
 
     async def update_chat_settings(self, chat_id: int, **fields: Any) -> None:
-        allowed = {"rarity_mode", "min_gamerscore", "daily_summary"}
+        allowed = {
+            "rarity_mode",
+            "min_gamerscore",
+            "daily_summary",
+            "rare_threshold_percent",
+            "daily_summary_time",
+            "timezone",
+        }
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"unknown chat_settings fields: {sorted(unknown)}")

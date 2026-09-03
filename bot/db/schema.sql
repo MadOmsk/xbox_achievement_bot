@@ -71,15 +71,24 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 
 CREATE TABLE IF NOT EXISTS chat_settings (
-    chat_id         INTEGER PRIMARY KEY REFERENCES chats(chat_id) ON DELETE CASCADE,
-    rarity_mode     TEXT    NOT NULL DEFAULT 'all'
-                    CHECK (rarity_mode IN ('all', 'rare')),
-    min_gamerscore  INTEGER NOT NULL DEFAULT 0,
-    daily_summary   INTEGER NOT NULL DEFAULT 1,
-    muted_title_ids TEXT    NOT NULL DEFAULT '[]'
+    chat_id                INTEGER PRIMARY KEY REFERENCES chats(chat_id) ON DELETE CASCADE,
+    rarity_mode            TEXT    NOT NULL DEFAULT 'all'
+                           CHECK (rarity_mode IN ('all', 'rare')),
+    min_gamerscore         INTEGER NOT NULL DEFAULT 0,
+    daily_summary          INTEGER NOT NULL DEFAULT 1,
+    muted_title_ids        TEXT    NOT NULL DEFAULT '[]',
+    -- Per-chat override of the matching app_settings default (SPEC 5.5, 5.7).
+    -- NULL means "follow the global value", resolved at read time, not
+    -- copied in at chat-creation time — a later change to the global default
+    -- must reach every chat without its own override immediately.
+    rare_threshold_percent REAL,
+    daily_summary_time     TEXT,
+    timezone                TEXT
 );
 
--- Global settings the admin turns: rare_threshold_percent, daily_summary_time, timezone
+-- Global settings the admin turns: rare_threshold_percent, daily_summary_time,
+-- timezone — also the fallback for chats with no override of their own
+-- (chat_settings' three nullable columns above)
 CREATE TABLE IF NOT EXISTS app_settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

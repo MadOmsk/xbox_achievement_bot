@@ -30,9 +30,14 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, TopGame, User
-from bot.poller.daily import build_summary, current_rare_threshold, full_leaderboard
+from bot.poller.daily import (
+    build_summary,
+    current_rare_threshold,
+    full_leaderboard,
+    resolve_chat_threshold,
+)
 from bot.services.achievements import plural_achievements, rarity_badge
-from bot.services.stats import counters_for, global_offset_minutes, local_now
+from bot.services.stats import counters_for, local_now, offset_minutes_for_zone
 from bot.services.tables import render_table, truncate_name
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
@@ -377,8 +382,12 @@ async def _summary_or_cooldown(
     # The cooldown covers "nothing new" too — that answer is still a message,
     # and without this it could be spammed just as freely as a real summary.
     _last_summary[chat_id] = time.monotonic()
-    offset = await global_offset_minutes(repo)
-    threshold = await current_rare_threshold(repo)
+    override = await repo.get_chat_overrides(chat_id)
+    zone = override.timezone or await repo.get_app_setting("timezone", "UTC")
+    offset = offset_minutes_for_zone(zone)
+    threshold = resolve_chat_threshold(
+        override.rare_threshold_percent, await current_rare_threshold(repo)
+    )
     built = await build_summary(repo, chat_id, threshold, local_now(offset).date())
     if built is None:
         return None, None, 0
@@ -411,7 +420,10 @@ async def summary_show_all(callback: CallbackQuery, repo: Repo) -> None:
         return
     assert callback.data is not None
     window = callback.data.rsplit(":", 1)[1]
-    threshold = await current_rare_threshold(repo)
+    override = await repo.get_chat_overrides(callback.message.chat.id)
+    threshold = resolve_chat_threshold(
+        override.rare_threshold_percent, await current_rare_threshold(repo)
+    )
     text = await full_leaderboard(repo, callback.message.chat.id, threshold, window)
     await callback.answer()
     if text is not None:

@@ -15,6 +15,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from bot.db.repo import AchievementRow, Repo
+from bot.poller.daily import resolve_chat_threshold
 from bot.services.achievements import format_digest, format_single, passes_filters
 
 log = logging.getLogger(__name__)
@@ -64,9 +65,10 @@ class Publisher:
         user_settings = await self._repo.get_user_settings(tg_id)
         if user_settings is None:
             return
-        threshold = await self._rare_threshold()
+        default_threshold = await self._rare_threshold()
 
         for chat in await self._repo.publication_targets(tg_id):
+            threshold = resolve_chat_threshold(chat.rare_threshold_percent, default_threshold)
             allowed = [
                 item
                 for item in achievements

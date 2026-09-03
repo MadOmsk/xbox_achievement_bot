@@ -23,7 +23,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import Settings
-from bot.db.repo import AdminUserRow, Repo
+from bot.db.repo import AdminUserRow, ChatTarget, Repo
 from bot.poller.fetcher import Fetcher
 from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 from bot.services.tables import truncate_name
@@ -73,12 +73,13 @@ async def admin_home(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> N
 
 # ------------------------------------------------------ free-text numeric settings
 
-# Three settings share one "type a number, not a button" flow — a percent and
+# Four settings share one "type a number, not a button" flow — a percent and
 # two row caps are all free values that a handful of preset buttons could not
-# cover anyway. Keyed by tg_id -> which setting, so a stray digit typed by an
-# admin who isn't in this flow is never mistaken for input, and the one
-# regex handler below knows which validation and label apply.
-_awaiting_input: dict[int, str] = {}
+# cover anyway. Keyed by tg_id -> (which setting, which chat — None for the
+# global one), so a stray digit typed by an admin who isn't in this flow is
+# never mistaken for input, and the one regex handler below knows which
+# validation, label and target (app_settings or one chat's chat_settings) apply.
+_awaiting_input: dict[int, tuple[str, int | None]] = {}
 
 RARE_THRESHOLD_MIN = 0.01
 RARE_THRESHOLD_MAX = 100.0
@@ -100,7 +101,7 @@ _LIMIT_DEFAULTS = {
 @router.callback_query(F.data == "a:rare")
 async def rare_menu(callback: CallbackQuery, repo: Repo) -> None:
     current = await repo.get_app_setting("rare_threshold_percent", "10")
-    _awaiting_input[callback.from_user.id] = "rare_threshold_percent"
+    _awaiting_input[callback.from_user.id] = ("rare_threshold_percent", None)
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
@@ -108,7 +109,9 @@ async def rare_menu(callback: CallbackQuery, repo: Repo) -> None:
         f"Порог «редкой» ачивки: {current}%\n\n"
         "Пришли новое значение одним числом, например 12 или 7.5 — от 0 до 100.\n\n"
         "Ниже этого процента ачивка считается редкой. Действует на всех, "
-        "кто выбрал режим «только редкие»; на уже опубликованное не влияет.",
+        "кто выбрал режим «только редкие» и у кого чат не переопределил "
+        "порог для себя (карточка чата, раздел «Чаты»); на уже "
+        "опубликованное не влияет.",
         builder.as_markup(),
     )
 
@@ -137,7 +140,7 @@ async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
     key = callback.data.rsplit(":", 1)[1]
     label = _LIMIT_LABELS[key]
     current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
-    _awaiting_input[callback.from_user.id] = key
+    _awaiting_input[callback.from_user.id] = (key, None)
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:limits"))
     await _redraw(
@@ -150,9 +153,10 @@ async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
 @router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(r"^\d+([.,]\d+)?$"))
 async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) -> None:
     assert message.from_user is not None and message.text is not None
-    key = _awaiting_input.get(message.from_user.id)
-    if key is None:
+    pending = _awaiting_input.get(message.from_user.id)
+    if pending is None:
         return  # a plain number from an admin who isn't in this flow — ignore
+    key, chat_id = pending
 
     if key == "rare_threshold_percent":
         value = float(message.text.replace(",", "."))
@@ -161,18 +165,29 @@ async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) 
                 f"Число должно быть от {RARE_THRESHOLD_MIN} до {RARE_THRESHOLD_MAX}. Ещё раз?"
             )
             return
-        stored = f"{value:g}"
-        confirm = f"Порог редкости: {stored}%"
-    else:
-        if "." in message.text or "," in message.text:
-            await message.answer("Здесь только целое число. Ещё раз?")
-            return
-        value_int = int(message.text)
-        if not (LIMIT_MIN <= value_int <= LIMIT_MAX):
-            await message.answer(f"Число должно быть от {LIMIT_MIN} до {LIMIT_MAX}. Ещё раз?")
-            return
-        stored = str(value_int)
-        confirm = f"{_LIMIT_LABELS[key]}: {stored}"
+        confirm = f"Порог редкости: {value:g}%"
+
+        del _awaiting_input[message.from_user.id]
+        if chat_id is None:
+            await repo.set_app_setting(key, f"{value:g}", message.from_user.id)
+            reply_text, markup = await _home(repo, fetcher)
+        else:
+            await repo.update_chat_settings(chat_id, rare_threshold_percent=value)
+            reply_text, markup = await _chat(repo, chat_id)
+        await message.answer(f"{confirm}\n\n{reply_text}", reply_markup=markup)
+        return
+
+    # The row-cap settings below are always global — chat_id is always None
+    # here, there is no per-chat meaning for them.
+    if "." in message.text or "," in message.text:
+        await message.answer("Здесь только целое число. Ещё раз?")
+        return
+    value_int = int(message.text)
+    if not (LIMIT_MIN <= value_int <= LIMIT_MAX):
+        await message.answer(f"Число должно быть от {LIMIT_MIN} до {LIMIT_MAX}. Ещё раз?")
+        return
+    stored = str(value_int)
+    confirm = f"{_LIMIT_LABELS[key]}: {stored}"
 
     del _awaiting_input[message.from_user.id]
     await repo.set_app_setting(key, stored, message.from_user.id)
@@ -182,22 +197,59 @@ async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) 
 
 # ---------------------------------------------------------------- daily time
 
+# Global and per-chat screens (SPEC 5.7, 6.4) share these two grid builders —
+# only the callback prefixes and whether a "reset to global" row makes sense
+# differ. A per-chat screen gets that row whenever its own value is set; the
+# global screen never does, since there is nothing above it to fall back to.
+
+
+def _hour_grid_markup(
+    current_label: str,
+    set_prefix: str,
+    tz_callback: str,
+    back_callback: str,
+    reset_callback: str | None,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for hour in range(24):
+        label = f"{hour:02d}"
+        mark = "• " if current_label.startswith(label) else ""
+        builder.add(
+            InlineKeyboardButton(text=f"{mark}{label}", callback_data=f"{set_prefix}{hour}")
+        )
+    builder.adjust(6)
+    builder.row(InlineKeyboardButton(text="Часовой пояс ▸", callback_data=tz_callback))
+    if reset_callback:
+        builder.row(
+            InlineKeyboardButton(text="✕ Сбросить на глобальное", callback_data=reset_callback)
+        )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data=back_callback))
+    return builder.as_markup()
+
+
+def _zone_grid_markup(
+    current: str, set_prefix: str, back_callback: str, reset_callback: str | None
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for zone in COMMON_ZONES:
+        mark = "• " if zone == current else ""
+        builder.add(InlineKeyboardButton(text=f"{mark}{zone}", callback_data=f"{set_prefix}{zone}"))
+    builder.adjust(2)
+    if reset_callback:
+        builder.row(
+            InlineKeyboardButton(text="✕ Сбросить на глобальное", callback_data=reset_callback)
+        )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data=back_callback))
+    return builder.as_markup()
+
 
 @router.callback_query(F.data == "a:time")
 async def time_menu(callback: CallbackQuery, repo: Repo) -> None:
     current = await repo.get_app_setting("daily_summary_time", "23:00")
-    builder = InlineKeyboardBuilder()
-    for hour in range(24):
-        label = f"{hour:02d}"
-        mark = "• " if current.startswith(label) else ""
-        builder.add(InlineKeyboardButton(text=f"{mark}{label}", callback_data=f"a:time:{hour}"))
-    builder.adjust(6)
-    builder.row(InlineKeyboardButton(text="Часовой пояс ▸", callback_data="a:tz"))
-    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
         callback,
-        f"Время итога дня: {current}\n\nВо сколько отправлять сводку в чаты.",
-        builder.as_markup(),
+        f"Время итога дня: {current}\n\nВо сколько отправлять сводку в чаты по умолчанию.",
+        _hour_grid_markup(current, "a:time:", "a:tz", "a:home", None),
     )
 
 
@@ -213,18 +265,12 @@ async def time_set(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> Non
 @router.callback_query(F.data == "a:tz")
 async def zone_menu(callback: CallbackQuery, repo: Repo) -> None:
     current = await repo.get_app_setting("timezone", "UTC")
-    builder = InlineKeyboardBuilder()
-    for zone in COMMON_ZONES:
-        mark = "• " if zone == current else ""
-        builder.add(InlineKeyboardButton(text=f"{mark}{zone}", callback_data=f"a:tzs:{zone}"))
-    builder.adjust(2)
-    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:time"))
     await _redraw(
         callback,
-        f"Часовой пояс чата: {current}\n\n"
-        "По нему считается итог дня. На личные счётчики не влияет — "
-        "у каждого свой пояс.",
-        builder.as_markup(),
+        f"Часовой пояс по умолчанию: {current}\n\n"
+        "По нему считается итог дня в чатах без своего пояса. На личные "
+        "счётчики не влияет — у каждого свой пояс.",
+        _zone_grid_markup(current, "a:tzs:", "a:time", None),
     )
 
 
@@ -235,6 +281,128 @@ async def zone_set(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> Non
     await repo.set_app_setting("timezone", zone, callback.from_user.id)
     await callback.answer(zone)
     await _redraw(callback, *await _home(repo, fetcher))
+
+
+# ------------------------------------------------------- per-chat overrides
+
+
+@router.callback_query(F.data.startswith("a:crt:"))
+async def chat_rare_menu(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_chat(repo, chat_id)
+    if chat is None:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+    _awaiting_input[callback.from_user.id] = ("rare_threshold_percent", chat_id)
+    current = await _chat_threshold_label(repo, chat)
+    builder = InlineKeyboardBuilder()
+    if chat.rare_threshold_percent is not None:
+        builder.row(
+            InlineKeyboardButton(text="✕ Сбросить на глобальное", callback_data=f"a:crtx:{chat_id}")
+        )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data=f"a:chat:{chat_id}"))
+    await _redraw(
+        callback,
+        f"Порог «редкой» ачивки в «{chat.title or chat_id}»: {current}\n\n"
+        "Пришли новое значение одним числом, например 12 или 7.5 — от 0 до 100. "
+        "Действует только на этот чат.",
+        builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("a:crtx:"))
+async def chat_rare_reset(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    await repo.update_chat_settings(chat_id, rare_threshold_percent=None)
+    await callback.answer("Сброшено на глобальное")
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
+@router.callback_query(F.data.startswith("a:ctime:"))
+async def chat_time_menu(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_chat(repo, chat_id)
+    if chat is None:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+    default = await repo.get_app_setting("daily_summary_time", "23:00")
+    current = chat.daily_summary_time or default
+    label = current if chat.daily_summary_time else f"{current} (по умолчанию)"
+    reset = f"a:ctimex:{chat_id}" if chat.daily_summary_time else None
+    await _redraw(
+        callback,
+        f"Время итога дня в «{chat.title or chat_id}»: {label}",
+        _hour_grid_markup(
+            current, f"a:ctimes:{chat_id}:", f"a:ctz:{chat_id}", f"a:chat:{chat_id}", reset
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("a:ctimes:"))
+async def chat_time_set(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    _, _, chat_id_raw, hour_raw = callback.data.split(":")
+    chat_id, hour = int(chat_id_raw), int(hour_raw)
+    await repo.update_chat_settings(chat_id, daily_summary_time=f"{hour:02d}:00")
+    await callback.answer(f"Итог дня в {hour:02d}:00")
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
+@router.callback_query(F.data.startswith("a:ctimex:"))
+async def chat_time_reset(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    await repo.update_chat_settings(chat_id, daily_summary_time=None)
+    await callback.answer("Сброшено на глобальное")
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
+@router.callback_query(F.data.startswith("a:ctz:"))
+async def chat_zone_menu(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_chat(repo, chat_id)
+    if chat is None:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+    default = await repo.get_app_setting("timezone", "UTC")
+    current = chat.timezone or default
+    label = current if chat.timezone else f"{current} (по умолчанию)"
+    reset = f"a:ctzx:{chat_id}" if chat.timezone else None
+    await _redraw(
+        callback,
+        f"Часовой пояс «{chat.title or chat_id}»: {label}",
+        _zone_grid_markup(current, f"a:ctzs:{chat_id}:", f"a:ctime:{chat_id}", reset),
+    )
+
+
+@router.callback_query(F.data.startswith("a:ctzs:"))
+async def chat_zone_set(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    _, _, chat_id_raw, zone = callback.data.split(":", 3)
+    chat_id = int(chat_id_raw)
+    await repo.update_chat_settings(chat_id, timezone=zone)
+    await callback.answer(zone)
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
+@router.callback_query(F.data.startswith("a:ctzx:"))
+async def chat_zone_reset(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    await repo.update_chat_settings(chat_id, timezone=None)
+    await callback.answer("Сброшено на глобальное")
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
+async def _chat_threshold_label(repo: Repo, chat: ChatTarget) -> str:
+    if chat.rare_threshold_percent is not None:
+        return f"{chat.rare_threshold_percent:g}%"
+    default = await repo.get_app_setting("rare_threshold_percent", "10")
+    return f"{default}% (по умолчанию)"
 
 
 # --------------------------------------------------------------------- users
@@ -547,12 +715,19 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         return "Чат не найден.", _back_home()
 
     names = await repo.chat_subscriber_names(chat_id)
+    threshold_label = await _chat_threshold_label(repo, chat)
+    default_time = await repo.get_app_setting("daily_summary_time", "23:00")
+    default_zone = await repo.get_app_setting("timezone", "UTC")
+    time_label = chat.daily_summary_time or f"{default_time} (по умолчанию)"
+    zone_label = chat.timezone or f"{default_zone} (по умолчанию)"
     text = (
         f"💬 {chat.title or chat_id}\n\n"
         f"Состояние:    {'активен' if chat.is_active else 'отключён'}\n"
         f"Публикуется:  {chat.subscribers} чел.\n"
         f"Редкость:     {'только редкие' if chat.rarity_mode == 'rare' else 'любые'}\n"
-        f"Итог дня:     {'да' if chat.daily_summary else 'нет'}\n"
+        f"Порог редк.:  {threshold_label}\n"
+        f"Итог дня:     {'да' if chat.daily_summary else 'нет'}, в {time_label}\n"
+        f"Часовой пояс: {zone_label}\n"
         f"Мин. G:       {chat.min_gamerscore}\n\n"
         + ("Подписаны: " + ", ".join(names) if names else "Подписанных пока нет.")
     )
@@ -565,8 +740,18 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     )
     builder.row(
         InlineKeyboardButton(
+            text=f"Порог редкости: {threshold_label} ▸", callback_data=f"a:crt:{chat_id}"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
             text=f"Итог дня: {'включён' if chat.daily_summary else 'выключен'}",
             callback_data=f"a:cds:{chat_id}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=f"Время итога: {time_label} ▸", callback_data=f"a:ctime:{chat_id}"
         )
     )
     builder.row(
@@ -587,7 +772,7 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
 # ------------------------------------------------------------------- helpers
 
 
-async def _find_chat(repo: Repo, chat_id: int):
+async def _find_chat(repo: Repo, chat_id: int) -> ChatTarget | None:
     return next((c for c in await repo.admin_chats() if c.chat_id == chat_id), None)
 
 

@@ -62,13 +62,15 @@ async def counters_for(repo: Repo, xuid: str, now: datetime | None = None) -> Co
     return Counters(today, today_score, month, month_score)
 
 
-async def global_offset_minutes(repo: Repo) -> int:
-    """Offset used where one common day boundary is needed (SPEC 5.9).
+def offset_minutes_for_zone(name: str | None) -> int:
+    """An IANA name to a fixed UTC offset in minutes, defaulting to 0 for an
+    empty or unknown name.
 
     Stored as an IANA name, but the whole bot works in fixed offsets, so it is
-    resolved once here rather than dragging tzdata through every counter.
+    resolved here rather than dragging tzdata through every counter. Used both
+    for the global timezone and a chat's own override (SPEC 5.7) — the caller
+    decides which name to resolve, this just does the resolution.
     """
-    name = await repo.get_app_setting("timezone")
     if not name:
         return 0
     try:

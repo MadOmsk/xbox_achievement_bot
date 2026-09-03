@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
 
 from bot.db.repo import AchievementRow, Repo
-from bot.poller.daily import DailySummary, build_summary, full_leaderboard
+from bot.poller.daily import DailySummary, build_summary, full_leaderboard, resolve_chat_threshold
 from bot.util import utcnow
 
 CHAT_ID = -100500
@@ -208,6 +208,80 @@ async def test_summary_has_no_show_all_button_under_the_limit(repo: Repo) -> Non
     assert built is not None
     _text, markup = built
     assert markup is None
+
+
+async def test_chat_rare_threshold_override_round_trips_through_repo(repo: Repo) -> None:
+    """The admin panel's per-chat override (SPEC 6.4) and the publisher both
+    read this column through admin_chats()/publication_targets() — a NULL
+    round trip confirms "reset to global" actually clears it, not just sets 0."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+
+    chat = next(c for c in await repo.admin_chats() if c.chat_id == CHAT_ID)
+    assert chat.rare_threshold_percent is None  # no override yet — follows global
+
+    await repo.update_chat_settings(CHAT_ID, rare_threshold_percent=7.5)
+    chat = next(c for c in await repo.admin_chats() if c.chat_id == CHAT_ID)
+    assert chat.rare_threshold_percent == 7.5
+
+    await repo.update_chat_settings(CHAT_ID, rare_threshold_percent=None)
+    chat = next(c for c in await repo.admin_chats() if c.chat_id == CHAT_ID)
+    assert chat.rare_threshold_percent is None  # "reset to global" really clears it
+
+
+def test_resolve_chat_threshold_falls_back_when_no_override() -> None:
+    """A chat's own value wins; NULL means it never set one, not zero."""
+    assert resolve_chat_threshold(None, 10.0) == 10.0
+    assert resolve_chat_threshold(5.0, 10.0) == 5.0
+    assert resolve_chat_threshold(0.0, 10.0) == 0.0  # an explicit 0 is a real override
+
+
+async def test_chat_own_summary_time_overrides_the_global_one(repo: Repo) -> None:
+    """A per-chat daily_summary_time (SPEC 5.7) fires that chat at its own
+    time even while the global default points somewhere else."""
+    await _chat_with_two_players(repo)
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
+    await repo.set_app_setting("timezone", "UTC")
+    await repo.set_app_setting("daily_summary_time", "00:00")  # global: never matches "now" below
+    own_time = datetime.now(UTC).strftime("%H:%M")
+    await repo.update_chat_settings(CHAT_ID, daily_summary_time=own_time, timezone="UTC")
+
+    bot = FakeBot()
+    await DailySummary(bot, repo).tick()
+
+    assert len(bot.sent) == 1
+    assert bot.sent[0][0] == CHAT_ID
+
+
+async def test_chat_without_override_still_follows_the_global_time(repo: Repo) -> None:
+    """The other half of the same mechanism: no override at all must still
+    behave exactly as before this feature — global time, global zone."""
+    await _chat_with_two_players(repo)
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
+    await repo.set_app_setting("timezone", "UTC")
+    await repo.set_app_setting("daily_summary_time", datetime.now(UTC).strftime("%H:%M"))
+
+    bot = FakeBot()
+    await DailySummary(bot, repo).tick()
+
+    assert len(bot.sent) == 1
+
+
+async def test_chat_own_time_does_not_fire_outside_its_own_slot(repo: Repo) -> None:
+    """An override that does NOT match "now" must not fire just because the
+    global time does — each chat's own value is what decides for it."""
+    await _chat_with_two_players(repo)
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
+    now = datetime.now(UTC).strftime("%H:%M")
+    await repo.set_app_setting("timezone", "UTC")
+    await repo.set_app_setting("daily_summary_time", now)
+    await repo.update_chat_settings(CHAT_ID, daily_summary_time="00:00", timezone="UTC")
+    if now == "00:00":  # astronomically unlikely, but keep the test honest
+        await repo.update_chat_settings(CHAT_ID, daily_summary_time="00:01")
+
+    bot = FakeBot()
+    await DailySummary(bot, repo).tick()
+
+    assert bot.sent == []
 
 
 async def test_disabled_chat_gets_nothing(repo: Repo) -> None:
