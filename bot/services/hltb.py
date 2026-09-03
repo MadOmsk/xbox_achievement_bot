@@ -8,6 +8,7 @@ library swap, never touches handlers or the database schema beyond this file.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from howlongtobeatpy import HowLongToBeat
@@ -15,6 +16,12 @@ from howlongtobeatpy import HowLongToBeat
 from bot.db.repo import HltbCacheRow, Repo
 
 MAX_RESULTS = 20
+
+# Xbox's own title names carry trademark clutter and separator punctuation
+# HLTB's search doesn't expect — e.g. a chat-recent-games shortcut hands over
+# "HELLDIVERS™ 2" verbatim (SPEC 6.6). Stripped to spaces, not deleted
+# outright, so "Halo: Reach" still searches as two words, not "HaloReach".
+_SEARCH_NOISE = re.compile(r"[™©®℠:,]")
 
 
 class HltbError(Exception):
@@ -38,8 +45,13 @@ async def search(query: str) -> list[HltbResult]:
     """Up to MAX_RESULTS candidates, best match first — nobody types an
     exact HLTB title, so the caller always needs to let a person pick
     (SPEC 6.6)."""
+    query = _clean_query(query)
     try:
-        entries = await HowLongToBeat().async_search(query)
+        # similarity_case_sensitive=False: found live — Xbox's own title
+        # names are often ALL CAPS ("HELLDIVERS 2"), and the library's
+        # default case-sensitive similarity check threw out the correct
+        # match entirely (0 results) rather than just ranking it lower.
+        entries = await HowLongToBeat().async_search(query, similarity_case_sensitive=False)
     except Exception as exc:  # the library exposes no narrower exception type
         raise HltbError(f"HLTB search failed for {query!r}: {exc}") from None
     entries = sorted(entries or [], key=lambda e: e.similarity, reverse=True)
@@ -104,3 +116,7 @@ def _clean(hours: float | None) -> float | None:
     # Some entries (co-op/PvP-only games) report 0 or omit a style entirely —
     # "0 hours" would read as an error, not as "no data".
     return hours if hours and hours > 0 else None
+
+
+def _clean_query(text: str) -> str:
+    return " ".join(_SEARCH_NOISE.sub(" ", text).split())

@@ -12,7 +12,7 @@ from bot.handlers.hltb import (
     _recent_keyboard,
     _results_keyboard,
 )
-from bot.services.hltb import HltbResult, _clean, _from_cache_row
+from bot.services.hltb import HltbResult, _clean, _clean_query, _from_cache_row
 
 CHAT_ID = -100777
 
@@ -34,6 +34,27 @@ def test_clean_treats_zero_and_none_as_no_data() -> None:
     assert _clean(0) is None
     assert _clean(0.0) is None
     assert _clean(11.3) == 11.3
+
+
+def test_clean_query_strips_trademark_symbols() -> None:
+    # Real Xbox title names, not made up (SPEC 6.6) — HLTB's own search
+    # chokes on this clutter that Xbox's titlehub happily includes.
+    assert _clean_query("HELLDIVERS™ 2") == "HELLDIVERS 2"
+    assert _clean_query("Minecraft Legends© - Windows") == "Minecraft Legends - Windows"
+    assert _clean_query("Some Game®") == "Some Game"
+
+
+def test_clean_query_strips_separator_punctuation_without_gluing_words() -> None:
+    assert _clean_query("Halo: Reach") == "Halo Reach"
+    assert _clean_query("Assassin's Creed, Valhalla") == "Assassin's Creed Valhalla"
+
+
+def test_clean_query_collapses_the_extra_whitespace_it_creates() -> None:
+    assert _clean_query("Game™:  Subtitle") == "Game Subtitle"
+
+
+def test_clean_query_leaves_an_ordinary_title_untouched() -> None:
+    assert _clean_query("Gears of War 3") == "Gears of War 3"
 
 
 def test_from_cache_row_round_trips() -> None:
