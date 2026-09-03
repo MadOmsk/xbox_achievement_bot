@@ -28,8 +28,8 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, User
-from bot.poller.daily import build_summary, current_rare_threshold
+from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, TopGame, User
+from bot.poller.daily import build_summary, current_rare_threshold, full_leaderboard
 from bot.services.achievements import (
     platform_note,
     plural_achievements,
@@ -165,7 +165,25 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
 # -------------------------------------------------------------------- stats
 
 
-async def _build_stats_text(repo: Repo, target: User) -> str | None:
+def _games_table(games: list[TopGame]) -> str:
+    return render_table(
+        ["#", "Игра", "Ач.", "+G"],
+        [
+            [
+                str(place),
+                game.name or "без названия",
+                str(game.unlocked or 0),
+                f"+{thousands(game.gamerscore or 0)}",
+            ]
+            for place, game in enumerate(games, start=1)
+        ],
+        ["<", "<", ">", ">"],
+    )
+
+
+async def _build_stats_text(
+    repo: Repo, target: User
+) -> tuple[str, InlineKeyboardMarkup | None] | None:
     """Shared by /stats and /who's buttons (SPEC 6.3) — one implementation,
     so a player's card looks the same no matter how it was opened."""
     if not target.xuid:
@@ -187,27 +205,53 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
         # date-bounded one can — better absent than quietly wrong (SPEC 5.4).
     ]
 
-    games = await repo.recent_games(target.xuid, utcnow() - timedelta(days=RECENT_GAMES_DAYS))
+    limit = await _stats_games_limit(repo)
+    since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
+    # limit+1: not for display, just enough to tell "more exist" from
+    # "exactly limit exist" without a second, count-only query.
+    games = await repo.recent_games(target.xuid, since, limit=limit + 1)
+    markup = None
     if games:
-        lines += [
-            "",
-            f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>",
-            "",
-            render_table(
-                ["#", "Игра", "Ач.", "+G"],
-                [
+        truncated = len(games) > limit
+        lines += ["", f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>", _games_table(games[:limit])]
+        if truncated:
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[
                     [
-                        str(place),
-                        game.name or "без названия",
-                        str(game.unlocked or 0),
-                        f"+{thousands(game.gamerscore or 0)}",
+                        InlineKeyboardButton(
+                            text="📋 Показать все игры",
+                            callback_data=f"stats:allgames:{target.xuid}",
+                        )
                     ]
-                    for place, game in enumerate(games, start=1)
-                ],
-                ["<", "<", ">", ">"],
-            ),
-        ]
-    return "\n".join(lines)
+                ]
+            )
+    return "\n".join(lines), markup
+
+
+async def _stats_games_limit(repo: Repo) -> int:
+    raw = await repo.get_app_setting("stats_games_limit", "15")
+    try:
+        return int(raw or 15)
+    except ValueError:
+        return 15
+
+
+@router.callback_query(F.data.startswith("stats:allgames:"))
+async def stats_show_all_games(callback: CallbackQuery, repo: Repo) -> None:
+    """«Показать все игры» under a truncated /stats table — a fresh message
+    with the uncapped list, not the original re-edited (SPEC 6.3)."""
+    if not isinstance(callback.message, Message):
+        return
+    assert callback.data is not None
+    xuid = callback.data.rsplit(":", 1)[1]
+    since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
+    # A defensive cap, not a real one: nobody plays 200 distinct games in 30
+    # days, this just keeps a pathological case from overflowing a message.
+    games = await repo.recent_games(xuid, since, limit=200)
+    await callback.answer()
+    if games:
+        text = f"<b>Игры за {RECENT_GAMES_DAYS} дней, полностью</b>\n{_games_table(games)}"
+        await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("stats"))
@@ -216,11 +260,12 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
     if target is None:
         await message.answer(_UNKNOWN)
         return
-    text = await _build_stats_text(repo, target)
-    if text is None:
+    built = await _build_stats_text(repo, target)
+    if built is None:
         await message.answer("Этот человек ещё не подключил Xbox.")
         return
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    text, markup = built
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 # --------------------------------------------------------------------- online
@@ -295,16 +340,19 @@ async def who_stats_button(callback: CallbackQuery, repo: Repo) -> None:
     if target is None:
         await callback.answer("Не нашёл такого пользователя.", show_alert=True)
         return
-    text = await _build_stats_text(repo, target)
+    built = await _build_stats_text(repo, target)
     await callback.answer()
-    if text is not None and isinstance(callback.message, Message):
-        await callback.message.answer(text, parse_mode=ParseMode.HTML)
+    if built is not None and isinstance(callback.message, Message):
+        text, markup = built
+        await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 # ------------------------------------------------------------------- summary
 
 
-async def _summary_or_cooldown(repo: Repo, chat_id: int) -> tuple[str | None, int]:
+async def _summary_or_cooldown(
+    repo: Repo, chat_id: int
+) -> tuple[str | None, InlineKeyboardMarkup | None, int]:
     """The report itself, or how many minutes are left before it can be asked
     for again (SPEC 5.7, 6.3) — one cooldown clock and one set of numbers
     no matter how it was triggered.
@@ -316,15 +364,18 @@ async def _summary_or_cooldown(repo: Repo, chat_id: int) -> tuple[str | None, in
         _last_summary.get(chat_id), time.monotonic(), SUMMARY_COOLDOWN_SECONDS
     )
     if minutes_left:
-        return None, minutes_left
+        return None, None, minutes_left
 
     # The cooldown covers "nothing new" too — that answer is still a message,
     # and without this it could be spammed just as freely as a real summary.
     _last_summary[chat_id] = time.monotonic()
     offset = await global_offset_minutes(repo)
     threshold = await current_rare_threshold(repo)
-    text = await build_summary(repo, chat_id, threshold, local_now(offset).date())
-    return text, 0
+    built = await build_summary(repo, chat_id, threshold, local_now(offset).date())
+    if built is None:
+        return None, None, 0
+    text, markup = built
+    return text, markup, 0
 
 
 @router.message(Command("summary"))
@@ -334,14 +385,29 @@ async def summary_command(message: Message, repo: Repo) -> None:
         await message.answer("Сводка считается по чату — набери команду в группе.")
         return
 
-    text, minutes_left = await _summary_or_cooldown(repo, message.chat.id)
+    text, markup, minutes_left = await _summary_or_cooldown(repo, message.chat.id)
     if minutes_left:
         await message.answer(f"Сводку уже присылали недавно. Ещё раз — через {minutes_left} мин.")
         return
     if text is None:
         await message.answer("За последние сутки в чате пока никто ничего не выбил.")
         return
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("summary:all:"))
+async def summary_show_all(callback: CallbackQuery, repo: Repo) -> None:
+    """«Показать всех» under a truncated summary table — a fresh, uncapped
+    re-fetch as its own message, not the original send re-edited (SPEC 6.3)."""
+    if not isinstance(callback.message, Message):
+        return
+    assert callback.data is not None
+    window = callback.data.rsplit(":", 1)[1]
+    threshold = await current_rare_threshold(repo)
+    text = await full_leaderboard(repo, callback.message.chat.id, threshold, window)
+    await callback.answer()
+    if text is not None:
+        await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("recent"))

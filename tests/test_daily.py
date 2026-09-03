@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from datetime import date as date_type
 
 from bot.db.repo import AchievementRow, Repo
-from bot.poller.daily import DailySummary, build_summary
+from bot.poller.daily import DailySummary, build_summary, full_leaderboard
 from bot.util import utcnow
 
 CHAT_ID = -100500
 XUID_A = "xuid-a"
 XUID_B = "xuid-b"
+
+
+async def summary_text(repo: Repo, chat_id: int, threshold: float, today: date_type) -> str | None:
+    """build_summary now also returns an optional "показать всех" keyboard —
+    most of these tests only care about the text."""
+    built = await build_summary(repo, chat_id, threshold, today)
+    return built[0] if built is not None else None
 
 
 class FakeBot:
@@ -61,7 +69,7 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
         XUID_B, [achievement("b1", now, 20, rarity=None)], is_backfill=True
     )
 
-    text = await build_summary(repo, CHAT_ID, 10.0, now.date())
+    text = await summary_text(repo, CHAT_ID, 10.0, now.date())
 
     assert text is not None
     assert "Igor" in text and "Alex" in text
@@ -76,7 +84,7 @@ async def test_zero_scorers_still_appear(repo: Repo) -> None:
     await _chat_with_two_players(repo)
     await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
 
-    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+    text = await summary_text(repo, CHAT_ID, 10.0, utcnow().date())
 
     assert text is not None
     assert "Alex" in text  # unlocked nothing, still listed
@@ -91,7 +99,7 @@ async def test_gamertag_is_escaped_inside_the_html_table(repo: Repo) -> None:
     await repo.subscribe(CHAT_ID, 1)
     await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
 
-    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+    text = await summary_text(repo, CHAT_ID, 10.0, utcnow().date())
 
     assert text is not None
     assert "<C>" not in text  # would be parsed as a (bogus) HTML tag
@@ -120,7 +128,7 @@ async def test_window_is_a_rolling_day_not_a_calendar_one(repo: Repo) -> None:
         [achievement("late-yesterday", utcnow() - timedelta(hours=23))],
         is_backfill=False,
     )
-    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+    text = await summary_text(repo, CHAT_ID, 10.0, utcnow().date())
     assert text is not None and "Igor" in text
 
 
@@ -134,7 +142,7 @@ async def test_month_window_is_thirty_rolling_days(repo: Repo) -> None:
         is_backfill=False,
     )
 
-    text = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+    text = await summary_text(repo, CHAT_ID, 10.0, utcnow().date())
 
     assert text is not None
     # Two total achievements (today + old) must not both land in the 30-day
@@ -155,6 +163,51 @@ async def test_summary_is_sent_once_per_day(repo: Repo) -> None:
 
     assert len(bot.sent) == 1
     assert bot.sent[0][0] == CHAT_ID
+
+
+async def test_summary_offers_show_all_button_only_past_the_configured_limit(
+    repo: Repo,
+) -> None:
+    """The admin-configurable summary_top_limit (default 15) caps the table;
+    past it a "Показать всех" button should appear, pointing at a fresh,
+    uncapped re-fetch — not the original list carried over (SPEC 6.3)."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    for i in range(3):
+        tg_id, xuid, tag = i + 1, f"xuid-{i}", f"Player{i}"
+        await repo.ensure_user(tg_id, tag.lower())
+        await repo.link_xbox_account(tg_id, xuid, tag, 0)
+        await repo.subscribe(CHAT_ID, tg_id)
+        await repo.insert_new_achievements(
+            xuid, [achievement(f"a{i}", utcnow())], is_backfill=False
+        )
+    await repo.set_app_setting("summary_top_limit", "2")
+
+    built = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+
+    assert built is not None
+    text, markup = built
+    assert markup is not None
+    buttons = [b for row in markup.inline_keyboard for b in row]
+    assert any(b.callback_data == "summary:all:day" for b in buttons)
+    assert any(b.callback_data == "summary:all:month" for b in buttons)
+    # Only 2 of the 3 players make it into the capped 24h table.
+    day_section = text.split("30 дней")[0]
+    assert sum(day_section.count(f"Player{i}") for i in range(3)) == 2
+
+    full = await full_leaderboard(repo, CHAT_ID, 10.0, "day")
+    assert full is not None
+    assert all(f"Player{i}" in full for i in range(3))
+
+
+async def test_summary_has_no_show_all_button_under_the_limit(repo: Repo) -> None:
+    await _chat_with_two_players(repo)
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", utcnow())], is_backfill=False)
+
+    built = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+
+    assert built is not None
+    _text, markup = built
+    assert markup is None
 
 
 async def test_disabled_chat_gets_nothing(repo: Repo) -> None:

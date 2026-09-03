@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
@@ -27,7 +28,7 @@ DAY_WINDOW_HOURS = 24
 # calendar boundary would cut the window at an arbitrary moment and give every
 # member a different "this month" depending on when they check.
 MONTH_WINDOW_DAYS = 30
-TABLE_TOP = 15
+DEFAULT_TABLE_TOP = 15
 MONTHS = (
     "января",
     "февраля",
@@ -65,15 +66,18 @@ class DailySummary:
             if await self._repo.daily_report_sent(chat.chat_id, report_date):
                 continue
 
-            text = await build_summary(self._repo, chat.chat_id, threshold, now_local.date())
-            if text is None:
+            built = await build_summary(self._repo, chat.chat_id, threshold, now_local.date())
+            if built is None:
                 # Nobody unlocked anything: staying silent keeps the summary
                 # meaningful instead of turning it into daily noise (SPEC 5.7).
                 await self._repo.mark_daily_report_sent(chat.chat_id, report_date)
                 continue
+            text, markup = built
 
             try:
-                await self._bot.send_message(chat.chat_id, text, parse_mode=ParseMode.HTML)
+                await self._bot.send_message(
+                    chat.chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup
+                )
             except TelegramForbiddenError:
                 log.info("chat %s refused the summary, deactivating", chat.chat_id)
                 await self._repo.deactivate_chat(chat.chat_id)
@@ -92,7 +96,17 @@ async def current_rare_threshold(repo: Repo) -> float:
         return 10.0
 
 
-async def build_summary(repo: Repo, chat_id: int, threshold: float, today: date) -> str | None:
+async def current_top_limit(repo: Repo) -> int:
+    raw = await repo.get_app_setting("summary_top_limit", str(DEFAULT_TABLE_TOP))
+    try:
+        return int(raw or DEFAULT_TABLE_TOP)
+    except ValueError:
+        return DEFAULT_TABLE_TOP
+
+
+async def build_summary(
+    repo: Repo, chat_id: int, threshold: float, today: date
+) -> tuple[str, InlineKeyboardMarkup | None] | None:
     """The same two-window report used by the scheduled job and by /summary
     on demand — one implementation, one set of numbers (SPEC 5.7, 6.3).
 
@@ -113,25 +127,52 @@ async def build_summary(repo: Repo, chat_id: int, threshold: float, today: date)
         chat_id, now - timedelta(days=MONTH_WINDOW_DAYS), threshold
     )
 
-    lines = [
-        f"📊 <b>24 часа</b>, {today.day} {MONTHS[today.month - 1]}",
-        "",
-        *_section(day_rows),
-    ]
+    top_limit = await current_top_limit(repo)
+    day_lines, day_full = _section(day_rows, top_limit)
+    lines = [f"📊 <b>24 часа</b>, {today.day} {MONTHS[today.month - 1]}", *day_lines]
+
+    month_full = False
     if month_rows:
-        lines += ["", "📊 <b>30 дней</b>", "", *_section(month_rows)]
-    return "\n".join(lines)
+        month_lines, month_full = _section(month_rows, top_limit)
+        lines += ["", "📊 <b>30 дней</b>", *month_lines]
+
+    buttons = []
+    if day_full:
+        buttons.append(
+            InlineKeyboardButton(text="Показать всех (24ч)", callback_data="summary:all:day")
+        )
+    if month_full:
+        buttons.append(
+            InlineKeyboardButton(text="Показать всех (30д)", callback_data="summary:all:month")
+        )
+    markup = InlineKeyboardMarkup(inline_keyboard=[[b] for b in buttons]) if buttons else None
+    return "\n".join(lines), markup
 
 
-def _section(rows: list[ChatMemberStat]) -> list[str]:
+async def full_leaderboard(repo: Repo, chat_id: int, threshold: float, window: str) -> str | None:
+    """The uncapped table behind a summary's «Показать всех» button (SPEC
+    6.3) — re-fetched fresh rather than carried over from the original send,
+    same as /hltb's sessions do for their own "current data" reasons."""
+    now = utcnow()
+    hours = DAY_WINDOW_HOURS if window == "day" else MONTH_WINDOW_DAYS * 24
+    rows = await repo.chat_member_stats(chat_id, now - timedelta(hours=hours), threshold)
+    if not rows:
+        return None
+    lines, _ = _section(rows, limit=len(rows))  # limit=len(rows): never truncate here
+    label = "24 часа" if window == "day" else "30 дней"
+    return "\n".join([f"📊 <b>{label}, полностью</b>", *lines])
+
+
+def _section(rows: list[ChatMemberStat], limit: int) -> tuple[list[str], bool]:
     total = sum(row.count for row in rows)
     score = sum(row.score for row in rows)
     table = render_table(
         ["#", "Игрок", "Ач.", "+G", "💎"],
-        [_table_row(place, row) for place, row in enumerate(rows[:TABLE_TOP], start=1)],
+        [_table_row(place, row) for place, row in enumerate(rows[:limit], start=1)],
         ["<", "<", ">", ">", ">"],
     )
-    return [table, total_line("Всего", f"{plural_achievements(total)}, +{thousands(score)} G")]
+    lines = [table, total_line("Всего", f"{plural_achievements(total)}, +{thousands(score)} G")]
+    return lines, len(rows) > limit
 
 
 def _table_row(place: int, row: ChatMemberStat) -> list[str]:

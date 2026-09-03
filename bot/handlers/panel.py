@@ -254,7 +254,6 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         f"(+{thousands(counters.month_score)} G)",
         # No lifetime "Всего": seen_achievements is permanently best-effort
         # (SPEC 5.4), unlike the two date-bounded counters above it.
-        "",
         f"Часовой пояс: {format_offset(tz_offset)}",
     ]
     if needs_reconnect:

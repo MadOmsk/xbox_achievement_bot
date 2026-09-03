@@ -63,33 +63,41 @@ router.callback_query.filter(IsAdmin())
 
 @router.message(Command("admin"), F.chat.type == ChatType.PRIVATE)
 async def admin_command(message: Message, repo: Repo, fetcher: Fetcher) -> None:
-    _awaiting_rare_input.discard(message.from_user.id)  # a fresh /admin cancels any pending flow
+    _awaiting_input.pop(message.from_user.id, None)  # a fresh /admin cancels any pending flow
     text, markup = await _home(repo, fetcher)
     await message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data == "a:home")
 async def admin_home(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
-    _awaiting_rare_input.discard(callback.from_user.id)
+    _awaiting_input.pop(callback.from_user.id, None)
     await _redraw(callback, *await _home(repo, fetcher))
 
 
-# ------------------------------------------------------------ rare threshold
+# ------------------------------------------------------ free-text numeric settings
 
-# Waiting for a typed number, not a button — a percent is naturally a free
-# value, and eight preset buttons could not cover it anyway. Keyed by tg_id so
-# a stray digit typed by an admin who isn't in this flow is never mistaken
-# for a threshold.
-_awaiting_rare_input: set[int] = set()
+# Three settings share one "type a number, not a button" flow — a percent and
+# two row caps are all free values that a handful of preset buttons could not
+# cover anyway. Keyed by tg_id -> which setting, so a stray digit typed by an
+# admin who isn't in this flow is never mistaken for input, and the one
+# regex handler below knows which validation and label apply.
+_awaiting_input: dict[int, str] = {}
 
 RARE_THRESHOLD_MIN = 0.01
 RARE_THRESHOLD_MAX = 100.0
+LIMIT_MIN = 1
+LIMIT_MAX = 50
+
+_LIMIT_LABELS = {
+    "summary_top_limit": "Строк в /summary",
+    "stats_games_limit": "Игр в /stats",
+}
 
 
 @router.callback_query(F.data == "a:rare")
 async def rare_menu(callback: CallbackQuery, repo: Repo) -> None:
     current = await repo.get_app_setting("rare_threshold_percent", "10")
-    _awaiting_rare_input.add(callback.from_user.id)
+    _awaiting_input[callback.from_user.id] = "rare_threshold_percent"
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
@@ -102,24 +110,78 @@ async def rare_menu(callback: CallbackQuery, repo: Repo) -> None:
     )
 
 
+@router.callback_query(F.data == "a:limits")
+async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
+    summary_limit = await repo.get_app_setting("summary_top_limit", "15")
+    stats_limit = await repo.get_app_setting("stats_games_limit", "15")
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"Строк в /summary: {summary_limit} ▸", callback_data="a:limit:summary_top_limit"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=f"Игр в /stats: {stats_limit} ▸", callback_data="a:limit:stats_games_limit"
+        )
+    )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
+    await _redraw(
+        callback,
+        "Лимиты строк в таблицах.\n\n"
+        "Когда реальных строк больше лимита, под таблицей появляется кнопка "
+        "«Показать все» — по ней прилетает отдельное сообщение с полным списком.",
+        builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("a:limit:"))
+async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    key = callback.data.rsplit(":", 1)[1]
+    label = _LIMIT_LABELS[key]
+    current = await repo.get_app_setting(key, "15")
+    _awaiting_input[callback.from_user.id] = key
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:limits"))
+    await _redraw(
+        callback,
+        f"{label}: {current}\n\nПришли новое значение целым числом, от {LIMIT_MIN} до {LIMIT_MAX}.",
+        builder.as_markup(),
+    )
+
+
 @router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(r"^\d+([.,]\d+)?$"))
-async def rare_threshold_input(message: Message, repo: Repo, fetcher: Fetcher) -> None:
+async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) -> None:
     assert message.from_user is not None and message.text is not None
-    if message.from_user.id not in _awaiting_rare_input:
+    key = _awaiting_input.get(message.from_user.id)
+    if key is None:
         return  # a plain number from an admin who isn't in this flow — ignore
 
-    value = float(message.text.replace(",", "."))
-    if not (RARE_THRESHOLD_MIN <= value <= RARE_THRESHOLD_MAX):
-        await message.answer(
-            f"Число должно быть от {RARE_THRESHOLD_MIN} до {RARE_THRESHOLD_MAX}. Ещё раз?"
-        )
-        return
+    if key == "rare_threshold_percent":
+        value = float(message.text.replace(",", "."))
+        if not (RARE_THRESHOLD_MIN <= value <= RARE_THRESHOLD_MAX):
+            await message.answer(
+                f"Число должно быть от {RARE_THRESHOLD_MIN} до {RARE_THRESHOLD_MAX}. Ещё раз?"
+            )
+            return
+        stored = f"{value:g}"
+        confirm = f"Порог редкости: {stored}%"
+    else:
+        if "." in message.text or "," in message.text:
+            await message.answer("Здесь только целое число. Ещё раз?")
+            return
+        value_int = int(message.text)
+        if not (LIMIT_MIN <= value_int <= LIMIT_MAX):
+            await message.answer(f"Число должно быть от {LIMIT_MIN} до {LIMIT_MAX}. Ещё раз?")
+            return
+        stored = str(value_int)
+        confirm = f"{_LIMIT_LABELS[key]}: {stored}"
 
-    _awaiting_rare_input.discard(message.from_user.id)
-    text = f"{value:g}"
-    await repo.set_app_setting("rare_threshold_percent", text, message.from_user.id)
+    del _awaiting_input[message.from_user.id]
+    await repo.set_app_setting(key, stored, message.from_user.id)
     reply_text, markup = await _home(repo, fetcher)
-    await message.answer(f"Порог редкости: {text}%\n\n{reply_text}", reply_markup=markup)
+    await message.answer(f"{confirm}\n\n{reply_text}", reply_markup=markup)
 
 
 # ---------------------------------------------------------------- daily time
@@ -311,6 +373,7 @@ async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup
         inline_keyboard=[
             [InlineKeyboardButton(text="Порог редкости ▸", callback_data="a:rare")],
             [InlineKeyboardButton(text="Время итога ▸", callback_data="a:time")],
+            [InlineKeyboardButton(text="Лимиты таблиц ▸", callback_data="a:limits")],
             [InlineKeyboardButton(text="Пользователи ▸", callback_data="a:users:0")],
             [InlineKeyboardButton(text="Чаты ▸", callback_data="a:chats")],
         ]
