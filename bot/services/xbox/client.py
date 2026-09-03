@@ -292,19 +292,19 @@ class XboxClient:
 
     # -------------------------------------------------------- title history
 
-    async def title_history(self, tg_id: int, max_items: int = 2000) -> list[TitleHistoryEntry]:
+    async def title_history(self, tg_id: int, max_items: int = 200) -> list[TitleHistoryEntry]:
         """Source of /stats and /online, of the x360 pass in backfill(), and of
-        the gamerscore in the panel.
+        the "recent games" table.
 
-        200 was the original cap and is wrong for anyone with a real library:
-        verified live on an account with 1091 titles, `max_items=200` summed
-        to 35,861 gamerscore (14 x360 titles caught) against a real 152,498 —
-        raising it to 2000 (titlehub itself caps at the account's actual
-        title count, this is just "ask for enough") brought the same account
-        to 151,903, with 250 x360 titles caught instead of 14. This is the
-        actual cause behind the "За месяц"/"Всего" drift documented in SPEC
-        5.4 — the reconnect-runs-backfill fix was necessary but insufficient
-        on its own, since backfill's x360 pass reads through this same call.
+        Not the source of the headline gamerscore anywhere — that is always
+        `users.gamerscore` from the profile (SPEC 5.4), never a sum over this.
+        The only thing this cap actually gates is backfill's x360 achievement
+        sweep, and that only needs to cover what "За месяц" cares about: a
+        person does not play 200+ distinct titles in 30 days, so 200 is not a
+        corner cut, it is already generous. (A live account with 1091 titles
+        briefly ran with max_items=2000 while chasing what looked like a gap
+        in "Всего" — that turned out to be the wrong target, since "Всего" is
+        a count, not a score; reverted once that was clear.)
         """
         manager = await self._auth.authenticated_manager(tg_id)
         assert manager.xsts_token is not None
