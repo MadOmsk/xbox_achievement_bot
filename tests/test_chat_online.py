@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bot.db.repo import ChatPresenceRow, Repo
-from bot.handlers.chat import _presence_icon, _presence_text, hub_keyboard
+from bot.handlers.chat import HELP_TEXT, _presence_icon, _presence_text, hub_keyboard
 
 XUID_A = "xuid-a"
 XUID_B = "xuid-b"
@@ -86,6 +86,17 @@ async def test_online_lists_a_connected_non_publisher_who_was_seen_writing(
     rows = await repo.chat_member_presence(CHAT_ID)
 
     assert {row.gamertag for row in rows} == {"Publisher", "Lurker"}
+
+
+def test_help_text_explains_what_the_bot_does_and_the_three_paths() -> None:
+    """SPEC 6.3: one line on what the bot is, then a branch for "first time",
+    "connected but not publishing" and "something's broken" — not a two-step
+    instruction that assumes only new users read it."""
+    assert "ачивк" in HELP_TEXT.split("\n\n")[0].lower()  # the "what I do" line
+    assert "Подключить Xbox" in HELP_TEXT
+    assert "Публиковать мои ачивки" in HELP_TEXT
+    assert "заново" in HELP_TEXT
+    assert "/who" in HELP_TEXT
 
 
 async def test_record_chat_seen_ignores_an_unknown_tg_id(repo: Repo) -> None:

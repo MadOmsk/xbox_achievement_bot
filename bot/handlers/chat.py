@@ -26,6 +26,7 @@ from aiogram.types import (
     Message,
     TelegramObject,
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, User
 from bot.poller.daily import build_summary, current_rare_threshold
@@ -165,8 +166,8 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
 
 
 async def _build_stats_text(repo: Repo, target: User) -> str | None:
-    """/stats' own rendering, factored out so a future caller can reuse the
-    exact same card instead of a second near-copy (SPEC 6.3)."""
+    """Shared by /stats and /who's buttons (SPEC 6.3) — one implementation,
+    so a player's card looks the same no matter how it was opened."""
     if not target.xuid:
         return None
 
@@ -253,12 +254,48 @@ async def online(message: Message, repo: Repo) -> None:
 
     # Plain text, no per-name buttons: a keyboard row per player stops being a
     # list and starts being a second keyboard once a chat has more than a
-    # few people. Look someone up with /stats @user or a reply instead.
+    # few people. Picking someone to look up is /who's job, not this one's.
     lines = ["🎮 <b>Кто сейчас в игре</b>", ""]
     for row in rows:
         name = row.gamertag or f"id{row.tg_id}"
         lines.append(f"{_presence_icon(row)} {name} — {_presence_text(row)}")
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+@router.message(Command("who"))
+async def who(message: Message, repo: Repo) -> None:
+    """The picker /online used to double as (SPEC 6.3) — split out so /online
+    can stay a plain glance and this can stay a plain button grid."""
+    if message.chat.type not in GROUP_TYPES:
+        await message.answer("Список игроков — по чату, набери команду в группе.")
+        return
+
+    rows = await repo.chat_member_presence(message.chat.id)
+    if not rows:
+        await message.answer("Никого из подключённых в этом чате пока не видел.")
+        return
+
+    builder = InlineKeyboardBuilder()
+    for row in rows:
+        builder.button(
+            text=row.gamertag or f"id{row.tg_id}", callback_data=f"who:stats:{row.tg_id}"
+        )
+    builder.adjust(3)
+    await message.answer("Чья статистика интересует?", reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data.startswith("who:stats:"))
+async def who_stats_button(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    tg_id = int(callback.data.rsplit(":", 1)[1])
+    target = await repo.get_user(tg_id)
+    if target is None:
+        await callback.answer("Не нашёл такого пользователя.", show_alert=True)
+        return
+    text = await _build_stats_text(repo, target)
+    await callback.answer()
+    if text is not None and isinstance(callback.message, Message):
+        await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 # ------------------------------------------------------------------- summary
@@ -359,12 +396,15 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
 # Most-used first, subscribe/unsubscribe at the end — those are one-time
 # setup, not something read every time (SPEC 6.3).
 HELP_TEXT = (
-    "🎮 Я публикую сюда ачивки Xbox тех, кто подписался.\n\n"
-    "Чтобы твои ачивки тоже летели сюда: сначала «Подключить Xbox», "
-    "потом «Публиковать мои ачивки».\n\n"
+    "🎮 Слежу за ачивками тех, кто играет на Xbox, и публикую их сюда — "
+    "с фильтром по редкости, статистикой каждого и итогом дня.\n\n"
+    "Первый раз здесь — жми «Подключить Xbox».\n"
+    "Уже подключён, но ачивок не видно — жми «Публиковать мои ачивки».\n"
+    "Что-то не работает — попробуй подключиться заново.\n\n"
     "Команды чата:\n"
     "/stats [@кто] — статистика игрока\n"
     "/online — кто сейчас в игре\n"
+    "/who — узнать стату конкретного игрока\n"
     "/recent [N] — последние ачивки чата\n"
     "/summary — сводка за сутки и за месяц\n\n"
     "/subscribe — публиковать мои ачивки здесь\n"
