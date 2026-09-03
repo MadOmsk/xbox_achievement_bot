@@ -185,9 +185,20 @@ async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
                 "чата, и при повторном входе старые ачивки не хлынут в чат заново.\n\n"
                 f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно "
                 f"только самому: {REVOKE_URL}",
-                reply_markup=disconnect_prompt_keyboard(),
+                reply_markup=disconnect_prompt_keyboard(from_panel=True),
                 disable_web_page_preview=True,
             )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "panel:disconnect:no")
+async def panel_disconnect_cancel(callback: CallbackQuery, repo: Repo) -> None:
+    # Cancelling here edits the panel message itself, so restore the panel
+    # in place instead of leaving a throwaway "cancelled" message behind.
+    text, markup = await render_panel(repo, callback.from_user.id)
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(text, reply_markup=markup)
     await callback.answer()
 
 

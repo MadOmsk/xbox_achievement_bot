@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from aiogram import F, Router
@@ -110,8 +111,11 @@ async def disconnect_command(message: Message, repo: Repo) -> None:
 
 @router.callback_query(F.data == "disconnect:no")
 async def disconnect_cancel(callback: CallbackQuery) -> None:
+    # Nothing changed — just remove the prompt instead of leaving a
+    # "cancelled" message behind for no reason.
     if isinstance(callback.message, Message):
-        await callback.message.edit_text("Отменил, всё остаётся как было.")
+        with contextlib.suppress(Exception):
+            await callback.message.delete()
     await callback.answer()
 
 

@@ -133,8 +133,11 @@ async def unsubscribe(message: Message, repo: Repo) -> None:
 
 @router.callback_query(F.data == "unsub:no")
 async def unsubscribe_cancel(callback: CallbackQuery) -> None:
+    # Nothing changed — remove the prompt instead of leaving a "cancelled"
+    # message in the group chat for no reason.
     if isinstance(callback.message, Message):
-        await callback.message.edit_text("Отменил, всё остаётся как было.")
+        with contextlib.suppress(Exception):
+            await callback.message.delete()
     await callback.answer()
 
 
@@ -456,8 +459,13 @@ async def subscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> Non
         return
     user = await repo.get_user(callback.from_user.id)
     if user is None or not user.xuid:
+        # Don't just tell him to go connect somewhere — send him straight into
+        # the same login deep link as the "Подключить Xbox" button. It carries
+        # this chat's id, so ConnectService auto-subscribes here once he's
+        # done (SPEC 6.3); no need to remember to come back and press this
+        # button again.
         me = await bot.me()
-        await callback.answer(f"Сначала подключи Xbox в личке: @{me.username}", show_alert=True)
+        await callback.answer(url=f"https://t.me/{me.username}?start=connect{message.chat.id}")
         return
 
     await repo.upsert_chat(message.chat.id, message.chat.title, callback.from_user.id)

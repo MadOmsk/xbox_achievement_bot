@@ -77,11 +77,15 @@ def next_rarity_mode(current: str) -> str:
     return RARITY_CHOICES[(index + 1) % len(RARITY_CHOICES)]
 
 
-def disconnect_prompt_keyboard() -> InlineKeyboardMarkup:
+def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMarkup:
+    # Cancelling from the panel must restore the panel in place, not just
+    # vanish — it needs its own callback so the handler knows to re-render
+    # rather than delete the (only) message.
+    cancel_data = "panel:disconnect:no" if from_panel else "disconnect:no"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Да, отключить", callback_data="disconnect:yes")],
-            [InlineKeyboardButton(text="Отмена", callback_data="disconnect:no")],
+            [InlineKeyboardButton(text="Отмена", callback_data=cancel_data)],
         ]
     )
 
