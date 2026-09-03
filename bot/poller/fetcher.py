@@ -24,6 +24,11 @@ class Fetcher:
         self._publisher = publisher
         self._backfill_slots = asyncio.Semaphore(concurrency)
 
+    def api_usage(self) -> list[tuple[int, int, float]]:
+        """(used, limit, window_seconds) — surfaced in the admin panel
+        (SPEC 6.4) so "are we anywhere near a limit" has an actual answer."""
+        return self._client.rate_limit_usage()
+
     async def poll_title(
         self,
         tg_id: int,

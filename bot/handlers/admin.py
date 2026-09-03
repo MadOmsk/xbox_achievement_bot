@@ -37,7 +37,6 @@ log = logging.getLogger(__name__)
 router = Router(name="admin")
 
 PAGE_SIZE = 8
-RARE_THRESHOLDS = (1, 2, 5, 10, 15, 20)
 COMMON_ZONES = (
     "Europe/Kaliningrad",
     "Europe/Moscow",
@@ -63,44 +62,64 @@ router.callback_query.filter(IsAdmin())
 
 
 @router.message(Command("admin"), F.chat.type == ChatType.PRIVATE)
-async def admin_command(message: Message, repo: Repo) -> None:
-    text, markup = await _home(repo)
+async def admin_command(message: Message, repo: Repo, fetcher: Fetcher) -> None:
+    _awaiting_rare_input.discard(message.from_user.id)  # a fresh /admin cancels any pending flow
+    text, markup = await _home(repo, fetcher)
     await message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data == "a:home")
-async def admin_home(callback: CallbackQuery, repo: Repo) -> None:
-    await _redraw(callback, *await _home(repo))
+async def admin_home(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
+    _awaiting_rare_input.discard(callback.from_user.id)
+    await _redraw(callback, *await _home(repo, fetcher))
 
 
 # ------------------------------------------------------------ rare threshold
+
+# Waiting for a typed number, not a button — a percent is naturally a free
+# value, and eight preset buttons could not cover it anyway. Keyed by tg_id so
+# a stray digit typed by an admin who isn't in this flow is never mistaken
+# for a threshold.
+_awaiting_rare_input: set[int] = set()
+
+RARE_THRESHOLD_MIN = 0.01
+RARE_THRESHOLD_MAX = 100.0
 
 
 @router.callback_query(F.data == "a:rare")
 async def rare_menu(callback: CallbackQuery, repo: Repo) -> None:
     current = await repo.get_app_setting("rare_threshold_percent", "10")
+    _awaiting_rare_input.add(callback.from_user.id)
     builder = InlineKeyboardBuilder()
-    for value in RARE_THRESHOLDS:
-        mark = "• " if str(value) == current else ""
-        builder.add(InlineKeyboardButton(text=f"{mark}{value}%", callback_data=f"a:rare:{value}"))
-    builder.adjust(3)
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
         callback,
-        "Порог «редкой» ачивки\n\n"
+        f"Порог «редкой» ачивки: {current}%\n\n"
+        "Пришли новое значение одним числом, например 12 или 7.5 — от 0 до 100.\n\n"
         "Ниже этого процента ачивка считается редкой. Действует на всех, "
         "кто выбрал режим «только редкие»; на уже опубликованное не влияет.",
         builder.as_markup(),
     )
 
 
-@router.callback_query(F.data.startswith("a:rare:"))
-async def rare_set(callback: CallbackQuery, repo: Repo) -> None:
-    assert callback.data is not None
-    value = callback.data.rsplit(":", 1)[1]
-    await repo.set_app_setting("rare_threshold_percent", value, callback.from_user.id)
-    await callback.answer(f"Порог: {value}%")
-    await _redraw(callback, *await _home(repo))
+@router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(r"^\d+([.,]\d+)?$"))
+async def rare_threshold_input(message: Message, repo: Repo, fetcher: Fetcher) -> None:
+    assert message.from_user is not None and message.text is not None
+    if message.from_user.id not in _awaiting_rare_input:
+        return  # a plain number from an admin who isn't in this flow — ignore
+
+    value = float(message.text.replace(",", "."))
+    if not (RARE_THRESHOLD_MIN <= value <= RARE_THRESHOLD_MAX):
+        await message.answer(
+            f"Число должно быть от {RARE_THRESHOLD_MIN} до {RARE_THRESHOLD_MAX}. Ещё раз?"
+        )
+        return
+
+    _awaiting_rare_input.discard(message.from_user.id)
+    text = f"{value:g}"
+    await repo.set_app_setting("rare_threshold_percent", text, message.from_user.id)
+    reply_text, markup = await _home(repo, fetcher)
+    await message.answer(f"Порог редкости: {text}%\n\n{reply_text}", reply_markup=markup)
 
 
 # ---------------------------------------------------------------- daily time
@@ -125,12 +144,12 @@ async def time_menu(callback: CallbackQuery, repo: Repo) -> None:
 
 
 @router.callback_query(F.data.startswith("a:time:"))
-async def time_set(callback: CallbackQuery, repo: Repo) -> None:
+async def time_set(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
     assert callback.data is not None
     hour = int(callback.data.rsplit(":", 1)[1])
     await repo.set_app_setting("daily_summary_time", f"{hour:02d}:00", callback.from_user.id)
     await callback.answer(f"Итог дня в {hour:02d}:00")
-    await _redraw(callback, *await _home(repo))
+    await _redraw(callback, *await _home(repo, fetcher))
 
 
 @router.callback_query(F.data == "a:tz")
@@ -152,12 +171,12 @@ async def zone_menu(callback: CallbackQuery, repo: Repo) -> None:
 
 
 @router.callback_query(F.data.startswith("a:tzs:"))
-async def zone_set(callback: CallbackQuery, repo: Repo) -> None:
+async def zone_set(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
     assert callback.data is not None
     zone = callback.data.split(":", 2)[2]
     await repo.set_app_setting("timezone", zone, callback.from_user.id)
     await callback.answer(zone)
-    await _redraw(callback, *await _home(repo))
+    await _redraw(callback, *await _home(repo, fetcher))
 
 
 # --------------------------------------------------------------------- users
@@ -268,7 +287,7 @@ async def chat_toggle_active(callback: CallbackQuery, repo: Repo) -> None:
 # ------------------------------------------------------------------- screens
 
 
-async def _home(repo: Repo) -> tuple[str, InlineKeyboardMarkup]:
+async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup]:
     users = await repo.admin_users()
     chats = await repo.admin_chats()
     threshold = await repo.get_app_setting("rare_threshold_percent", "10")
@@ -285,7 +304,8 @@ async def _home(repo: Repo) -> tuple[str, InlineKeyboardMarkup]:
         f"Итог дня:               {summary_time} ({zone})\n"
         f"Пользователей:          {len(users)} "
         f"({active} активных, {excluded} исключено, {broken} без входа)\n"
-        f"Чатов:                  {sum(1 for c in chats if c.is_active)}"
+        f"Чатов:                  {sum(1 for c in chats if c.is_active)}\n"
+        f"API (ачивки):           {_format_api_usage(fetcher.api_usage())}"
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -419,13 +439,15 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     if chat is None:
         return "Чат не найден.", _back_home()
 
+    names = await repo.chat_subscriber_names(chat_id)
     text = (
         f"💬 {chat.title or chat_id}\n\n"
         f"Состояние:    {'активен' if chat.is_active else 'отключён'}\n"
         f"Публикуется:  {chat.subscribers} чел.\n"
         f"Редкость:     {'только редкие' if chat.rarity_mode == 'rare' else 'любые'}\n"
         f"Итог дня:     {'да' if chat.daily_summary else 'нет'}\n"
-        f"Мин. G:       {chat.min_gamerscore}"
+        f"Мин. G:       {chat.min_gamerscore}\n\n"
+        + ("Подписаны: " + ", ".join(names) if names else "Подписанных пока нет.")
     )
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -461,6 +483,19 @@ def _back_home() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="‹ Назад", callback_data="a:home")]]
     )
+
+
+def _format_api_usage(windows: list[tuple[int, int, float]]) -> str:
+    """ "3/100 за 15с · 12/300 за 5 мин" — how close the shared achievements
+    rate limiter is to Microsoft's own windows (SPEC 4), a diagnostic against
+    a bug in the poller, not a persisted budget (removed once already, see
+    приложение А — this reads the limiter's live in-memory counters, no
+    database table, nothing to re-add)."""
+    parts = []
+    for used, limit, span in windows:
+        label = f"{span / 60:g} мин" if span >= 60 else f"{span:g}с"
+        parts.append(f"{used}/{limit} за {label}")
+    return " · ".join(parts) if parts else "нет данных"
 
 
 def _icon(user: AdminUserRow) -> str:

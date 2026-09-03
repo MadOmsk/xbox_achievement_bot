@@ -96,11 +96,28 @@ class RateLimiter:
             log.debug("rate limiter sleeping for %.1fs", wait)
             await asyncio.sleep(wait)
 
+    def usage(self) -> list[tuple[int, int, float]]:
+        """A snapshot of (used, limit, window_seconds) per window, for the
+        admin panel's API diagnostic (SPEC 6.4) — a read, not an acquire, so
+        checking it never itself counts against the budget."""
+        now = asyncio.get_running_loop().time()
+        result = []
+        for limit, span, calls in self._windows:
+            while calls and now - calls[0] > span:
+                calls.popleft()
+            result.append((len(calls), limit, span))
+        return result
+
 
 class XboxClient:
     def __init__(self, auth: XboxAuthService, limiter: RateLimiter | None = None) -> None:
         self._auth = auth
         self._limiter = limiter or RateLimiter()
+
+    def rate_limit_usage(self) -> list[tuple[int, int, float]]:
+        """(used, limit, window_seconds) for each achievements-service window
+        this client shares across every user (SPEC 4, 6.4)."""
+        return self._limiter.usage()
 
     # ----------------------------------------------------------- presence
 
