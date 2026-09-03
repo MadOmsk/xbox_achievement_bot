@@ -125,6 +125,18 @@ class PresenceRow:
 
 
 @dataclass(slots=True)
+class ChatPresenceRow:
+    """One row of /online (SPEC 6.3): a subscribed member plus his presence."""
+
+    tg_id: int
+    gamertag: str | None
+    xuid: str
+    state: str | None
+    title_id: str | None
+    title_name: str | None
+
+
+@dataclass(slots=True)
 class ChatMemberStat:
     tg_id: int
     gamertag: str | None
@@ -615,6 +627,10 @@ class Repo:
         )
         await self._conn.commit()
 
+    async def chat_exists(self, chat_id: int) -> bool:
+        cursor = await self._conn.execute("SELECT 1 FROM chats WHERE chat_id = ?", (chat_id,))
+        return await cursor.fetchone() is not None
+
     async def subscribe(self, chat_id: int, tg_id: int) -> None:
         await self._conn.execute(
             "INSERT OR IGNORE INTO subscriptions (chat_id, tg_id, created_at) VALUES (?, ?, ?)",
@@ -785,6 +801,35 @@ class Repo:
                 count=int(row["cnt"]),
                 score=int(row["score"]),
                 rare=int(row["rare"] or 0),
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def chat_member_presence(self, chat_id: int) -> list[ChatPresenceRow]:
+        """Every subscribed, non-excluded member with his last known presence
+        — for /online (SPEC 6.3). Playing-now first, then online, then the
+        rest, so the people actually worth pinging float to the top."""
+        cursor = await self._conn.execute(
+            "SELECT u.tg_id, u.gamertag, u.xuid, p.state, p.title_id, p.title_name "
+            "FROM subscriptions sub "
+            "JOIN users u ON u.tg_id = sub.tg_id "
+            "LEFT JOIN presence_state p ON p.xuid = u.xuid "
+            "WHERE sub.chat_id = ? AND u.is_excluded = 0 "
+            "ORDER BY "
+            "  CASE WHEN p.state = 'Online' AND p.title_id IS NOT NULL THEN 0 "
+            "       WHEN p.state = 'Online' THEN 1 "
+            "       ELSE 2 END, "
+            "  u.gamertag",
+            (chat_id,),
+        )
+        return [
+            ChatPresenceRow(
+                tg_id=row["tg_id"],
+                gamertag=row["gamertag"],
+                xuid=row["xuid"],
+                state=row["state"],
+                title_id=row["title_id"],
+                title_name=row["title_name"],
             )
             for row in await cursor.fetchall()
         ]

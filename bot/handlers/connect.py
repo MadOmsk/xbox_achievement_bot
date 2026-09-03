@@ -53,14 +53,17 @@ async def start_with_payload(
         text, markup = await render_panel(repo, message.chat.id)
         await message.answer(text, reply_markup=markup)
         return
-    if command.args == "connect":
+    is_connect, origin_chat_id = _parse_connect_payload(command.args or "")
+    if is_connect:
         # Straight to the login link: the person pressed «Подключить Xbox» in a
-        # group and does not need the whole greeting again.
+        # group and does not need the whole greeting again. If the button
+        # carried which group it was pressed in, we auto-subscribe him there
+        # once the login actually succeeds (see on_linked in bot/main.py).
         user = await repo.get_user(message.chat.id)
         if user is not None and user.xuid:
             await message.answer("Xbox уже подключён. Настройки — /panel.")
             return
-        await _send_login_link(message, connect)
+        await _send_login_link(message, connect, origin_chat_id=origin_chat_id)
         return
     await _greet(message, repo, connect)
 
@@ -201,13 +204,29 @@ async def _greet(message: Message, repo: Repo, connect: ConnectService) -> None:
     await _send_login_link(message, connect)
 
 
-async def _send_login_link(message: Message, connect: ConnectService) -> None:
-    url = connect.start_login(message.chat.id)
+async def _send_login_link(
+    message: Message, connect: ConnectService, *, origin_chat_id: int | None = None
+) -> None:
+    url = connect.start_login(message.chat.id, origin_chat_id=origin_chat_id)
     await message.answer(
         "Жми кнопку и войди своим аккаунтом Microsoft. Пароль вижу не я — "
         "его спрашивает сам Microsoft.",
         reply_markup=connect_keyboard(url),
     )
+
+
+def _parse_connect_payload(args: str) -> tuple[bool, int | None]:
+    """`?start=connect` from a private chat, or `?start=connect<chat_id>` from
+    the group hub keyboard (SPEC 6.3) — (is it a connect payload, which
+    group, if any)."""
+    if args == "connect":
+        return True, None
+    if args.startswith("connect"):
+        try:
+            return True, int(args.removeprefix("connect"))
+        except ValueError:
+            return False, None
+    return False, None
 
 
 def _username(message: Message) -> str | None:

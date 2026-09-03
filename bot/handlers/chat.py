@@ -1,4 +1,4 @@
-"""Group commands. M2 covers /subscribe and /unsubscribe (SPEC 6.3)."""
+"""Group commands (SPEC 6.3). UI only — no SQL outside repo, no API calls."""
 
 from __future__ import annotations
 
@@ -26,20 +26,16 @@ from aiogram.types import (
     Message,
     TelegramObject,
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.repo import RecentAchievement, Repo, User
+from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, User
 from bot.poller.daily import build_summary, current_rare_threshold
 from bot.services.achievements import (
     platform_note,
     plural_achievements,
     rarity_badge,
 )
-from bot.services.stats import (
-    counters_for,
-    global_offset_minutes,
-    local_now,
-    month_start_utc,
-)
+from bot.services.stats import counters_for, global_offset_minutes, local_now
 from bot.services.tables import render_table, total_line
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
@@ -55,6 +51,8 @@ SUMMARY_COOLDOWN_SECONDS = 600
 _last_summary: dict[int, float] = {}
 
 RECENT_GAMES_DAYS = 30
+RECENT_DEFAULT = 5
+RECENT_MAX = 20
 
 
 class UsernameMiddleware(BaseMiddleware):
@@ -76,6 +74,9 @@ class UsernameMiddleware(BaseMiddleware):
         if isinstance(event, Message) and event.from_user and event.from_user.username:
             await self._repo.update_username(event.from_user.id, event.from_user.username)
         return await handler(event, data)
+
+
+# ------------------------------------------------------------- subscription
 
 
 @router.message(Command("subscribe"))
@@ -108,29 +109,61 @@ async def subscribe(message: Message, repo: Repo) -> None:
 
 @router.message(Command("unsubscribe"))
 async def unsubscribe(message: Message, repo: Repo) -> None:
+    """Same weight as /disconnect: losing your feed in a chat you might not
+    remember subscribing in deserves a confirm, not an instant action."""
     if message.chat.type not in GROUP_TYPES or message.from_user is None:
         return
     if not await repo.is_subscribed(message.chat.id, message.from_user.id):
         await message.answer("Ты здесь и не публиковался.")
         return
-    await repo.unsubscribe(message.chat.id, message.from_user.id)
-    await message.answer("Больше не публикую твои ачивки в этом чате.")
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, отписаться",
+                    callback_data=f"unsub:yes:{message.from_user.id}",
+                )
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data="unsub:no")],
+        ]
+    )
+    await message.answer("Перестать публиковать твои ачивки в этом чате?", reply_markup=keyboard)
 
 
-RECENT_DEFAULT = 5
-RECENT_MAX = 20
-TOP_LIMIT = 10
+@router.callback_query(F.data == "unsub:no")
+async def unsubscribe_cancel(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text("Отменил, всё остаётся как было.")
+    await callback.answer()
 
 
-@router.message(Command("stats"))
-async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
-    target = await _resolve(message, repo, command.args)
-    if target is None:
-        await message.answer(_UNKNOWN)
+@router.callback_query(F.data.startswith("unsub:yes:"))
+async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    tg_id = int(callback.data.rsplit(":", 1)[1])
+    # The confirm buttons are visible to the whole group, not just the person
+    # who ran /unsubscribe — without this check anyone could confirm or
+    # cancel someone else's unsubscribe.
+    if callback.from_user.id != tg_id:
+        await callback.answer("Это не твоя кнопка.", show_alert=True)
         return
+    if not isinstance(callback.message, Message):
+        return
+    await repo.unsubscribe(callback.message.chat.id, tg_id)
+    await callback.message.edit_text("Больше не публикую твои ачивки в этом чате.")
+    await callback.answer()
+
+
+# -------------------------------------------------------------------- stats
+
+
+async def _build_stats_text(repo: Repo, target: User) -> str | None:
+    """Shared by /stats and the clickable names in /online (SPEC 6.3) — one
+    implementation, so a player's card looks the same no matter how it was
+    opened."""
     if not target.xuid:
-        await message.answer("Этот человек ещё не подключил Xbox.")
-        return
+        return None
 
     settings_row = await repo.get_user_settings(target.tg_id)
     counters = await counters_for(
@@ -165,78 +198,89 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
                 ["<", "<", ">", ">"],
             ),
         ]
-    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+    return "\n".join(lines)
 
 
-@router.message(Command("compare"))
-async def compare(message: Message, repo: Repo, command: CommandObject) -> None:
-    names = (command.args or "").split()
-    if not names:
-        await message.answer("Кого с кем? Например: /compare @user1 @user2")
-        return
-
-    first = await _resolve(message, repo, names[0])
-    second = (
-        await _resolve(message, repo, names[1])
-        if len(names) > 1
-        else (await repo.get_user(message.from_user.id) if message.from_user else None)
-    )
-    if first is None or second is None:
+@router.message(Command("stats"))
+async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
+    target = await _resolve(message, repo, command.args)
+    if target is None:
         await message.answer(_UNKNOWN)
         return
-    if not first.xuid or not second.xuid:
-        await message.answer("Кто-то из них ещё не подключил Xbox.")
+    text = await _build_stats_text(repo, target)
+    if text is None:
+        await message.answer("Этот человек ещё не подключил Xbox.")
         return
-
-    left = await counters_for(repo, first.xuid, None)
-    right = await counters_for(repo, second.xuid, None)
-    lines = [
-        f"⚔️ {first.gamertag or first.tg_id}  против  {second.gamertag or second.tg_id}",
-        "",
-        f"Гeймерскор:  {thousands(first.gamerscore or 0)}  ·  {thousands(second.gamerscore or 0)}",
-        f"Сегодня:     {left.today}  ·  {right.today}",
-        f"За месяц:    {left.month}  ·  {right.month}",
-        f"Всего:       {thousands(left.total)}  ·  {thousands(right.total)}",
-    ]
-    await message.answer("\n".join(lines))
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-@router.message(Command("top"))
-async def top(message: Message, repo: Repo) -> None:
+# --------------------------------------------------------------------- online
+
+
+def _presence_text(row: ChatPresenceRow) -> str:
+    if row.state == "Online" and row.title_id:
+        return f"играет — {row.title_name or row.title_id}"
+    if row.state == "Online":
+        return "в сети, не играет"
+    if row.state is not None:
+        return "не в сети"
+    return "нет данных"
+
+
+def _presence_icon(row: ChatPresenceRow) -> str:
+    if row.state == "Online" and row.title_id:
+        return "🟢"
+    if row.state == "Online":
+        return "🟡"
+    return "⚪"
+
+
+@router.message(Command("online"))
+async def online(message: Message, repo: Repo) -> None:
     if message.chat.type not in GROUP_TYPES:
-        await message.answer("Таблица лидеров считается по чату — набери её в группе.")
+        await message.answer("Список игроков — по чату, набери команду в группе.")
         return
 
-    offset = await global_offset_minutes(repo)
-    threshold = float(await repo.get_app_setting("rare_threshold_percent", "10") or 10)
-    rows = await repo.chat_member_stats(message.chat.id, month_start_utc(offset), threshold)
-    # chat_member_stats now lists every subscriber, zero-scorers included, so
-    # "nobody has anything" has to check the counts, not just row presence.
-    if not rows or not any(row.count for row in rows):
-        await message.answer("За этот месяц пока никто ничего не выбил.")
+    rows = await repo.chat_member_presence(message.chat.id)
+    if not rows:
+        await message.answer("В этом чате пока никто не подписан — /subscribe.")
         return
 
-    table = render_table(
-        ["#", "Игрок", "Ач.", "+G", "💎"],
-        [
-            [
-                str(place),
-                row.gamertag or f"id{row.tg_id}",
-                str(row.count),
-                f"+{thousands(row.score)}",
-                str(row.rare) if row.rare else "",
-            ]
-            for place, row in enumerate(rows[:TOP_LIMIT], start=1)
-        ],
-        ["<", "<", ">", ">", ">"],
+    lines = ["🎮 <b>Кто сейчас в игре</b>", ""]
+    builder = InlineKeyboardBuilder()
+    for row in rows:
+        name = row.gamertag or f"id{row.tg_id}"
+        lines.append(f"{_presence_icon(row)} {name} — {_presence_text(row)}")
+        builder.button(text=name, callback_data=f"online:stats:{row.tg_id}")
+    builder.adjust(3)
+    await message.answer(
+        "\n".join(lines), reply_markup=builder.as_markup(), parse_mode=ParseMode.HTML
     )
-    await message.answer(f"🏆 <b>За месяц</b>\n\n{table}", parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data.startswith("online:stats:"))
+async def online_stats_button(callback: CallbackQuery, repo: Repo) -> None:
+    """A tap on a name in /online opens that person's /stats — the whole
+    point of listing names is to be able to look one up (SPEC 6.3)."""
+    assert callback.data is not None
+    tg_id = int(callback.data.rsplit(":", 1)[1])
+    target = await repo.get_user(tg_id)
+    if target is None:
+        await callback.answer("Не нашёл такого пользователя.", show_alert=True)
+        return
+    text = await _build_stats_text(repo, target)
+    await callback.answer()
+    if text is not None and isinstance(callback.message, Message):
+        await callback.message.answer(text, parse_mode=ParseMode.HTML)
+
+
+# ------------------------------------------------------------------- summary
 
 
 async def _summary_or_cooldown(repo: Repo, chat_id: int) -> tuple[str | None, int]:
     """The report itself, or how many minutes are left before it can be asked
-    for again. Shared by /summary and the hub button (SPEC 5.7, 6.3) — one
-    cooldown clock and one set of numbers no matter how it was triggered.
+    for again (SPEC 5.7, 6.3) — one cooldown clock and one set of numbers
+    no matter how it was triggered.
 
     Rate-limited per chat rather than per person: limiting only the requester
     would still let the whole chat spam it by taking turns.
@@ -258,7 +302,7 @@ async def _summary_or_cooldown(repo: Repo, chat_id: int) -> tuple[str | None, in
 
 @router.message(Command("summary"))
 async def summary_command(message: Message, repo: Repo) -> None:
-    """The same report the 23:00 job sends, on demand."""
+    """The same report the scheduled job sends, on demand."""
     if message.chat.type not in GROUP_TYPES:
         await message.answer("Сводка считается по чату — набери команду в группе.")
         return
@@ -322,38 +366,46 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
     return await repo.get_user(message.from_user.id) if message.from_user else None
 
 
+# ---------------------------------------------------------------------- hub
+
+
+# Most-used first, subscribe/unsubscribe at the end — those are one-time
+# setup, not something read every time (SPEC 6.3).
 HELP_TEXT = (
     "🎮 Я публикую сюда ачивки Xbox тех, кто подписался.\n\n"
+    "Чтобы твои ачивки тоже летели сюда: сначала «Подключить Xbox», "
+    "потом «Публиковать мои ачивки».\n\n"
     "Команды чата:\n"
+    "/stats [@кто] — статистика игрока\n"
+    "/online — кто сейчас в игре\n"
+    "/recent [N] — последние ачивки чата\n"
+    "/summary — сводка за сутки и за месяц\n\n"
     "/subscribe — публиковать мои ачивки здесь\n"
-    "/unsubscribe — перестать\n"
-    "/stats — статистика игрока\n"
-    "/compare @кто — сравнить двоих\n"
-    "/top — таблица за месяц\n"
-    "/summary — сводка за последние сутки (не чаще раза в 10 мин)\n"
-    "/recent [N] — последние ачивки чата\n\n"
+    "/unsubscribe — перестать\n\n"
     "Настройки — в личке: редкость, Xbox 360, часовой пояс."
 )
 
 
-def hub_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    """Buttons in a group act on whoever presses them.
+def hub_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup:
+    """Three buttons, not a control panel: SPEC 6.3 walks through connect →
+    publish in that order, so the keyboard should not offer more choices than
+    that story needs.
 
-    That is why they are allowed here at all: the rule from SPEC 6.3 forbids
-    rendering *someone's settings* where any member could page through them,
-    not a button that subscribes the presser himself.
+    Buttons act on whoever presses them — that is why "Публиковать мои
+    ачивки" is allowed here at all: SPEC 6.3 forbids rendering *someone
+    else's* settings where any member could page through them, not a button
+    that only ever touches the presser's own subscription.
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Публиковать мои", callback_data="sub:on"),
-                InlineKeyboardButton(text="🚫 Не публиковать", callback_data="sub:off"),
-            ],
-            [InlineKeyboardButton(text="📊 Сводка за сутки", callback_data="hub:summary")],
+            [InlineKeyboardButton(text="✅ Публиковать мои ачивки", callback_data="sub:on")],
             [
                 InlineKeyboardButton(
                     text="🔗 Подключить Xbox",
-                    url=f"https://t.me/{bot_username}?start=connect",
+                    # The chat id rides along in the deep-link payload so a
+                    # successful login can auto-subscribe him right back here
+                    # (SPEC 6.3) — see _parse_connect_payload in connect.py.
+                    url=f"https://t.me/{bot_username}?start=connect{chat_id}",
                 ),
                 InlineKeyboardButton(
                     text="⚙️ Настройки",
@@ -378,7 +430,8 @@ async def help_command(message: Message, repo: Repo, bot: Bot) -> None:
         return
     me = await bot.me()
     await message.answer(
-        await hub_text(repo, message.chat.id), reply_markup=hub_keyboard(me.username or "")
+        await hub_text(repo, message.chat.id),
+        reply_markup=hub_keyboard(me.username or "", message.chat.id),
     )
 
 
@@ -392,23 +445,8 @@ async def greet_new_chat(event: ChatMemberUpdated, repo: Repo, bot: Bot) -> None
     await bot.send_message(
         event.chat.id,
         await hub_text(repo, event.chat.id),
-        reply_markup=hub_keyboard(me.username or ""),
+        reply_markup=hub_keyboard(me.username or "", event.chat.id),
     )
-
-
-@router.callback_query(F.data == "hub:summary")
-async def hub_summary_button(callback: CallbackQuery, repo: Repo) -> None:
-    if not isinstance(callback.message, Message):
-        return
-    text, minutes_left = await _summary_or_cooldown(repo, callback.message.chat.id)
-    if minutes_left:
-        await callback.answer(f"Уже присылали недавно. Ещё раз — через {minutes_left} мин.")
-        return
-    await callback.answer()
-    if text is None:
-        await callback.message.answer("За последние сутки в чате пока никто ничего не выбил.")
-        return
-    await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data == "sub:on")
@@ -431,24 +469,11 @@ async def subscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> Non
     await _refresh_hub(message, repo, bot)
 
 
-@router.callback_query(F.data == "sub:off")
-async def unsubscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
-    message = callback.message
-    if not isinstance(message, Message):
-        return
-    if not await repo.is_subscribed(message.chat.id, callback.from_user.id):
-        await callback.answer("Ты здесь и не публиковался.")
-        return
-    await repo.unsubscribe(message.chat.id, callback.from_user.id)
-    await callback.answer("Больше не публикую твои ачивки здесь.")
-    await _refresh_hub(message, repo, bot)
-
-
 async def _refresh_hub(message: Message, repo: Repo, bot: Bot) -> None:
     me = await bot.me()
     with contextlib.suppress(Exception):
         # Telegram refuses an edit that changes nothing — not an error.
         await message.edit_text(
             await hub_text(repo, message.chat.id),
-            reply_markup=hub_keyboard(me.username or ""),
+            reply_markup=hub_keyboard(me.username or "", message.chat.id),
         )

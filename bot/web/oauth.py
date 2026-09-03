@@ -18,7 +18,7 @@ from bot.services.xbox.auth import TokenRefreshError, XboxIdentity
 
 log = logging.getLogger(__name__)
 
-OnLinked = Callable[[int, XboxIdentity], Awaitable[None]]
+OnLinked = Callable[[int, XboxIdentity, "int | None"], Awaitable[None]]
 
 _PAGE = """<!doctype html>
 <meta charset="utf-8">
@@ -92,7 +92,7 @@ class OAuthServer:
             return _page("Чего-то не хватает", "Открой ссылку из бота заново.", status=400)
 
         try:
-            tg_id, identity = await self._connect.complete_login(state, code)
+            tg_id, identity, origin_chat_id = await self._connect.complete_login(state, code)
         except ConnectError as exc:
             return _page("Не получилось", str(exc), status=400)
         except TokenRefreshError:
@@ -100,7 +100,7 @@ class OAuthServer:
             return _page("Microsoft не отдал токен", "Попробуй ещё раз: /connect", status=502)
 
         try:
-            await self._on_linked(tg_id, identity)
+            await self._on_linked(tg_id, identity, origin_chat_id)
         except Exception:
             # The account is already linked; only the Telegram message failed.
             log.exception("could not notify tg_id=%s about a successful login", tg_id)

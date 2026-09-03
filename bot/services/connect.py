@@ -23,6 +23,7 @@ class ConnectError(Exception):
 class _PendingState:
     tg_id: int
     created_at: float
+    origin_chat_id: int | None = None
 
 
 class ConnectService:
@@ -37,13 +38,19 @@ class ConnectService:
         self._repo = repo
         self._pending: dict[str, _PendingState] = {}
 
-    def start_login(self, tg_id: int) -> str:
+    def start_login(self, tg_id: int, origin_chat_id: int | None = None) -> str:
+        """`origin_chat_id` is the group the person pressed «Подключить Xbox»
+        from, if any — carried through to `complete_login` so we can
+        auto-subscribe him there once the login actually succeeds (SPEC 6.3).
+        """
         self._forget_expired()
         state = secrets.token_urlsafe(24)
-        self._pending[state] = _PendingState(tg_id=tg_id, created_at=utcnow().timestamp())
+        self._pending[state] = _PendingState(
+            tg_id=tg_id, created_at=utcnow().timestamp(), origin_chat_id=origin_chat_id
+        )
         return self._auth.authorization_url(state)
 
-    async def complete_login(self, state: str, code: str) -> tuple[int, XboxIdentity]:
+    async def complete_login(self, state: str, code: str) -> tuple[int, XboxIdentity, int | None]:
         """Validate the state, exchange the code, store the account."""
         self._forget_expired()
         pending = self._pending.pop(state, None)
@@ -61,7 +68,7 @@ class ConnectService:
 
         await self._auth.store_identity(pending.tg_id, identity)
         log.info("tg_id=%s linked xuid=%s", pending.tg_id, identity.xuid)
-        return pending.tg_id, identity
+        return pending.tg_id, identity, pending.origin_chat_id
 
     def _forget_expired(self) -> None:
         now = utcnow().timestamp()

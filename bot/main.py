@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sys
 
@@ -113,13 +114,24 @@ async def run(settings: Settings) -> None:
         except Exception:
             log.exception("post-reconnect title history refresh failed for tg_id=%s", tg_id)
 
-    async def on_linked(tg_id: int, identity: XboxIdentity) -> None:
+    async def on_linked(tg_id: int, identity: XboxIdentity, origin_chat_id: int | None) -> None:
         """Runs in the web callback, right after the account is stored."""
         # No achievements yet means this account is new to the bot, not someone
         # signing in again after his token expired.
         is_new = not await repo.has_any_achievements(identity.xuid)
         await bot.send_message(tg_id, f"✅ Подключил Xbox: {identity.gamertag}")
         await notifier.user_connected(tg_id, identity.gamertag, is_new=is_new)
+
+        # Pressed «Подключить Xbox» from inside a specific group: finish the
+        # job and subscribe him there too, instead of making him find
+        # /subscribe on his own right after he just did the hard part (6.3).
+        if origin_chat_id is not None and await repo.chat_exists(origin_chat_id):
+            await repo.subscribe(origin_chat_id, tg_id)
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    tg_id, "Заодно подписал на публикацию в чате, откуда ты пришёл."
+                )
+
         settings_row = await repo.get_user_settings(tg_id)
         if settings_row is None or settings_row.tz_offset_min is None:
             await bot.send_message(
@@ -192,23 +204,23 @@ async def _publish_command_menu(bot: Bot) -> None:
     """The command list Telegram shows behind the "/" button.
 
     Two scopes, because the useful commands differ: in a group nobody needs
-    /connect, and in private nobody needs /top.
+    /connect, and in private nobody needs /online. Most-used first in both —
+    subscribe/unsubscribe is one-time setup, not read every time (SPEC 6.3).
     """
     private = [
         BotCommand(command="panel", description="Моя панель и настройки"),
+        BotCommand(command="stats", description="Моя статистика"),
         BotCommand(command="connect", description="Подключить Xbox"),
         BotCommand(command="disconnect", description="Отключить Xbox"),
-        BotCommand(command="stats", description="Моя статистика"),
         BotCommand(command="help", description="Что я умею"),
     ]
     group = [
+        BotCommand(command="stats", description="Статистика игрока"),
+        BotCommand(command="online", description="Кто сейчас в игре"),
+        BotCommand(command="recent", description="Последние ачивки чата"),
+        BotCommand(command="summary", description="Сводка за сутки и за месяц"),
         BotCommand(command="subscribe", description="Публиковать мои ачивки здесь"),
         BotCommand(command="unsubscribe", description="Перестать публиковать"),
-        BotCommand(command="top", description="Таблица за месяц"),
-        BotCommand(command="summary", description="Сводка за последние сутки"),
-        BotCommand(command="recent", description="Последние ачивки чата"),
-        BotCommand(command="stats", description="Статистика игрока"),
-        BotCommand(command="compare", description="Сравнить двоих"),
         BotCommand(command="help", description="Что я умею"),
     ]
     try:
