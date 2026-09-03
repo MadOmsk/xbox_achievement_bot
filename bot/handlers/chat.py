@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
@@ -45,6 +46,19 @@ GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 # whole chat spam it in turns.
 SUMMARY_COOLDOWN_SECONDS = 600
 _last_summary: dict[int, float] = {}
+
+# subscribe/unsubscribe is a check-then-act (is_subscribed, then write) —
+# without a lock, a fast confirm-then-/subscribe (or a double-tapped button)
+# could interleave across two concurrently-handled updates and read stale
+# state. Same pattern as the per-user lock around token refresh
+# (bot/services/xbox/auth.py) — keyed by (chat_id, tg_id), not just tg_id,
+# since a subscription is scoped to one chat.
+_subscription_locks: dict[tuple[int, int], asyncio.Lock] = {}
+
+
+def _subscription_lock(chat_id: int, tg_id: int) -> asyncio.Lock:
+    return _subscription_locks.setdefault((chat_id, tg_id), asyncio.Lock())
+
 
 RECENT_GAMES_DAYS = 30
 RECENT_DEFAULT = 5
@@ -96,11 +110,11 @@ async def subscribe(message: Message, repo: Repo) -> None:
         return
 
     await repo.upsert_chat(message.chat.id, message.chat.title, message.from_user.id)
-    if await repo.is_subscribed(message.chat.id, message.from_user.id):
-        await message.answer("Ты уже публикуешься здесь.")
-        return
-
-    await repo.subscribe(message.chat.id, message.from_user.id)
+    async with _subscription_lock(message.chat.id, message.from_user.id):
+        if await repo.is_subscribed(message.chat.id, message.from_user.id):
+            await message.answer("Ты уже публикуешься здесь.")
+            return
+        await repo.subscribe(message.chat.id, message.from_user.id)
     await message.answer(
         f"Готово. Ачивки {user.gamertag or 'твои'} будут прилетать сюда.\n"
         "Настройки редкости и Xbox 360 — в личке, /panel."
@@ -153,7 +167,8 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
         return
     if not isinstance(callback.message, Message):
         return
-    await repo.unsubscribe(callback.message.chat.id, tg_id)
+    async with _subscription_lock(callback.message.chat.id, tg_id):
+        await repo.unsubscribe(callback.message.chat.id, tg_id)
     await callback.message.edit_text("Больше не публикую твои ачивки в этом чате.")
     await callback.answer()
 
@@ -567,10 +582,11 @@ async def subscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> Non
         return
 
     await repo.upsert_chat(message.chat.id, message.chat.title, callback.from_user.id)
-    if await repo.is_subscribed(message.chat.id, callback.from_user.id):
-        await callback.answer("Ты уже публикуешься здесь.")
-        return
-    await repo.subscribe(message.chat.id, callback.from_user.id)
+    async with _subscription_lock(message.chat.id, callback.from_user.id):
+        if await repo.is_subscribed(message.chat.id, callback.from_user.id):
+            await callback.answer("Ты уже публикуешься здесь.")
+            return
+        await repo.subscribe(message.chat.id, callback.from_user.id)
     await callback.answer("Готово, твои ачивки будут прилетать сюда.")
     await _refresh_hub(message, repo, bot)
 
