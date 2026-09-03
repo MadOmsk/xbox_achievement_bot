@@ -41,6 +41,10 @@ SESSION_TTL_SECONDS = 1800
 
 UNAVAILABLE = "HowLongToBeat сейчас недоступен, попробуй позже."
 SESSION_STALE = "Сессия устарела, начни заново — /hltb"
+# Long enough to wrap onto two lines — a one-line message keeps Telegram's
+# bubble (and the inline keyboard under it) narrow, so the buttons never
+# stretch to the full chat width the way they should for a list this wide.
+RESULTS_PROMPT = "Что из этого совпадает с твоей игрой? Жми на нужный вариант."
 
 
 @dataclass
@@ -199,7 +203,7 @@ async def _run_search(
 
     session.results = results
     session.page = 0
-    await _edit(bot, chat_id, message_id, "Что из этого?", _results_keyboard(results, 0))
+    await _edit(bot, chat_id, message_id, RESULTS_PROMPT, _results_keyboard(results, 0))
 
 
 def _results_keyboard(results: list[HltbResult], page: int) -> InlineKeyboardMarkup:
@@ -255,7 +259,7 @@ async def hltb_page(callback: CallbackQuery, bot: Bot) -> None:
     session.page = int(callback.data.rsplit(":", 1)[1])
     await callback.answer()
     markup = _results_keyboard(session.results, session.page)
-    await _edit(bot, key[0], key[1], "Что из этого?", markup)
+    await _edit(bot, key[0], key[1], RESULTS_PROMPT, markup)
 
 
 @router.callback_query(F.data.startswith("hltb:pick:"))
