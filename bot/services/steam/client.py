@@ -7,9 +7,10 @@ guesswork and nothing needs per-user OAuth. One API key for the whole bot;
 the only thing that can go wrong per person is a private profile, which is
 their own setting to fix, not ours.
 
-NOT yet verified against a live key (none configured while this was
-written) — the shapes below match Steam's published Web API docs, but
-should get one real end-to-end run before anyone relies on it.
+Verified live against a real key: GetPlayerSummaries returned a real
+profile with the fields this module reads, and ResolveVanityURL on a
+deliberately made-up name came back as a clean "no match" rather than an
+auth error — both calls genuinely reach Steam, not just parse correctly.
 """
 
 from __future__ import annotations
