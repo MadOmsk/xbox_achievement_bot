@@ -806,21 +806,30 @@ class Repo:
         ]
 
     async def chat_member_presence(self, chat_id: int) -> list[ChatPresenceRow]:
-        """Every subscribed, non-excluded member with his last known presence
-        — for /online (SPEC 6.3). Playing-now first, then online, then the
-        rest, so the people actually worth pinging float to the top."""
+        """Every connected, non-excluded member *known to be in this chat*,
+        with his last known presence — for /online (SPEC 6.3). "Known to be
+        in this chat" is the union of who publishes here (`subscriptions`)
+        and who has just been seen writing here (`chat_seen`) — publishing
+        and being a member are not the same thing, and /online listing only
+        publishers made it look like nobody else was playing. Playing-now
+        first, then online, then the rest, so the people actually worth
+        pinging float to the top."""
         cursor = await self._conn.execute(
             "SELECT u.tg_id, u.gamertag, u.xuid, p.state, p.title_id, p.title_name "
-            "FROM subscriptions sub "
-            "JOIN users u ON u.tg_id = sub.tg_id "
+            "FROM ("
+            "  SELECT tg_id FROM subscriptions WHERE chat_id = ? "
+            "  UNION "
+            "  SELECT tg_id FROM chat_seen WHERE chat_id = ?"
+            ") member "
+            "JOIN users u ON u.tg_id = member.tg_id "
             "LEFT JOIN presence_state p ON p.xuid = u.xuid "
-            "WHERE sub.chat_id = ? AND u.is_excluded = 0 "
+            "WHERE u.xuid IS NOT NULL AND u.is_excluded = 0 "
             "ORDER BY "
             "  CASE WHEN p.state = 'Online' AND p.title_id IS NOT NULL THEN 0 "
             "       WHEN p.state = 'Online' THEN 1 "
             "       ELSE 2 END, "
             "  u.gamertag",
-            (chat_id,),
+            (chat_id, chat_id),
         )
         return [
             ChatPresenceRow(
@@ -833,6 +842,20 @@ class Repo:
             )
             for row in await cursor.fetchall()
         ]
+
+    async def record_chat_seen(self, chat_id: int, tg_id: int) -> None:
+        """A message from a *known* tg_id in this group — feeds /online's
+        membership list (SPEC 6.3). The `SELECT ... WHERE EXISTS` guard keeps
+        the same "never create a user row just for writing a message" rule
+        as `update_username`: someone the bot has no `users` row for yet
+        leaves no trace here either."""
+        await self._conn.execute(
+            "INSERT INTO chat_seen (chat_id, tg_id, last_seen_at) "
+            "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE tg_id = ?) "
+            "ON CONFLICT (chat_id, tg_id) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+            (chat_id, tg_id, utcnow_iso(), tg_id),
+        )
+        await self._conn.commit()
 
     async def chat_subscriber_names(self, chat_id: int) -> list[str]:
         cursor = await self._conn.execute(

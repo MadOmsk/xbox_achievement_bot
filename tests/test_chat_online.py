@@ -66,3 +66,34 @@ async def test_chat_exists(repo: Repo) -> None:
     assert await repo.chat_exists(CHAT_ID) is False
     await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
     assert await repo.chat_exists(CHAT_ID) is True
+
+
+async def test_online_lists_a_connected_non_publisher_who_was_seen_writing(
+    repo: Repo,
+) -> None:
+    """/online must not be just the publisher list — someone connected who
+    never pressed "Публиковать" but did write here should still show up
+    (SPEC 6.3, the "test chat" bug: 2 people in the chat, /online showed 1)."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    await repo.ensure_user(1, "publisher")
+    await repo.link_xbox_account(1, XUID_A, "Publisher", 0)
+    await repo.subscribe(CHAT_ID, 1)
+
+    await repo.ensure_user(2, "lurker")
+    await repo.link_xbox_account(2, XUID_B, "Lurker", 0)
+    await repo.record_chat_seen(CHAT_ID, 2)  # wrote here, never subscribed
+
+    rows = await repo.chat_member_presence(CHAT_ID)
+
+    assert {row.gamertag for row in rows} == {"Publisher", "Lurker"}
+
+
+async def test_record_chat_seen_ignores_an_unknown_tg_id(repo: Repo) -> None:
+    """Same rule as update_username: writing in a chat must not create a user
+    row for someone the bot has never otherwise seen."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    await repo.record_chat_seen(CHAT_ID, 999999)  # no such user — must not raise
+
+    rows = await repo.chat_member_presence(CHAT_ID)
+
+    assert rows == []

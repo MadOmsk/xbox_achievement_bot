@@ -104,15 +104,23 @@ async def run(settings: Settings) -> None:
 
     async def refresh_after_reconnect(tg_id: int, xuid: str) -> None:
         """store_identity sets gamerscore = NULL on every connect (it does
-        not know the real value yet) — for a brand-new account backfill()
-        fixes that as a side effect, but a reconnect skips backfill entirely.
-        Without this a person who logs back in sees "0" gamerscore until the
-        next presence event happens to touch title_history (bug found live:
-        justdrunkzero showed 0 right after reconnecting)."""
+        not know the real value yet); without a refresh a person who logs
+        back in sees "0" until the next presence event happens to touch
+        title_history (bug found live: justdrunkzero showed 0 right after
+        reconnecting).
+
+        Runs the *full* backfill, not just a title_history refresh — the
+        first fix here did the smaller one on the theory that a reconnect's
+        history is already complete, which turned out false: seen_achievements
+        only grows through live polling and catch_up (both bounded to
+        recently-touched games), so anything not replayed since the initial
+        connect silently never lands there, and "Всего"/"За месяц" drift low
+        forever (SPEC 5.4). backfill() is idempotent and never publishes, so
+        re-running it on every reconnect is safe and fixes both at once."""
         try:
-            await fetcher.refresh_title_history(tg_id, xuid)
+            await fetcher.backfill(tg_id, xuid)
         except Exception:
-            log.exception("post-reconnect title history refresh failed for tg_id=%s", tg_id)
+            log.exception("post-reconnect backfill failed for tg_id=%s", tg_id)
 
     async def on_linked(tg_id: int, identity: XboxIdentity, origin_chat_id: int | None) -> None:
         """Runs in the web callback, right after the account is stored."""

@@ -26,7 +26,6 @@ from aiogram.types import (
     Message,
     TelegramObject,
 )
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, User
 from bot.poller.daily import build_summary, current_rare_threshold
@@ -56,7 +55,8 @@ RECENT_MAX = 20
 
 
 class UsernameMiddleware(BaseMiddleware):
-    """Keep users.username fresh — Bot API cannot resolve @name on demand.
+    """Keep users.username fresh, and note who's been seen writing in a group
+    (`chat_seen` — feeds /online, SPEC 6.3).
 
     Only existing rows are touched: a group member who never talked to the bot
     should not get a user record just for writing a message.
@@ -71,8 +71,11 @@ class UsernameMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, Message) and event.from_user and event.from_user.username:
-            await self._repo.update_username(event.from_user.id, event.from_user.username)
+        if isinstance(event, Message) and event.from_user:
+            if event.from_user.username:
+                await self._repo.update_username(event.from_user.id, event.from_user.username)
+            if event.chat.type in GROUP_TYPES:
+                await self._repo.record_chat_seen(event.chat.id, event.from_user.id)
         return await handler(event, data)
 
 
@@ -162,9 +165,8 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
 
 
 async def _build_stats_text(repo: Repo, target: User) -> str | None:
-    """Shared by /stats and the clickable names in /online (SPEC 6.3) — one
-    implementation, so a player's card looks the same no matter how it was
-    opened."""
+    """/stats' own rendering, factored out so a future caller can reuse the
+    exact same card instead of a second near-copy (SPEC 6.3)."""
     if not target.xuid:
         return None
 
@@ -246,35 +248,17 @@ async def online(message: Message, repo: Repo) -> None:
 
     rows = await repo.chat_member_presence(message.chat.id)
     if not rows:
-        await message.answer("В этом чате пока никто не подписан — /subscribe.")
+        await message.answer("Никого из подключённых в этом чате пока не видел.")
         return
 
+    # Plain text, no per-name buttons: a keyboard row per player stops being a
+    # list and starts being a second keyboard once a chat has more than a
+    # few people. Look someone up with /stats @user or a reply instead.
     lines = ["🎮 <b>Кто сейчас в игре</b>", ""]
-    builder = InlineKeyboardBuilder()
     for row in rows:
         name = row.gamertag or f"id{row.tg_id}"
         lines.append(f"{_presence_icon(row)} {name} — {_presence_text(row)}")
-        builder.button(text=name, callback_data=f"online:stats:{row.tg_id}")
-    builder.adjust(3)
-    await message.answer(
-        "\n".join(lines), reply_markup=builder.as_markup(), parse_mode=ParseMode.HTML
-    )
-
-
-@router.callback_query(F.data.startswith("online:stats:"))
-async def online_stats_button(callback: CallbackQuery, repo: Repo) -> None:
-    """A tap on a name in /online opens that person's /stats — the whole
-    point of listing names is to be able to look one up (SPEC 6.3)."""
-    assert callback.data is not None
-    tg_id = int(callback.data.rsplit(":", 1)[1])
-    target = await repo.get_user(tg_id)
-    if target is None:
-        await callback.answer("Не нашёл такого пользователя.", show_alert=True)
-        return
-    text = await _build_stats_text(repo, target)
-    await callback.answer()
-    if text is not None and isinstance(callback.message, Message):
-        await callback.message.answer(text, parse_mode=ParseMode.HTML)
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 # ------------------------------------------------------------------- summary
