@@ -26,9 +26,9 @@ from bot.db.repo import AdminUserRow, Repo
 from bot.poller.fetcher import Fetcher
 from bot.services.stats import (
     counters_for,
-    day_start_utc,
     global_offset_minutes,
     month_start_utc,
+    today_cutoff_utc,
 )
 from bot.util import humanize_ago
 
@@ -304,7 +304,7 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
         return "👥 Пока никто не подключился.", _back_home()
 
     offset = await global_offset_minutes(repo)
-    today = await repo.achievement_counts_by_xuid(day_start_utc(offset))
+    today = await repo.achievement_counts_by_xuid(today_cutoff_utc())
     month = await repo.achievement_counts_by_xuid(month_start_utc(offset))
 
     pages = max(1, -(-len(users) // PAGE_SIZE))

@@ -101,6 +101,18 @@ async def run(settings: Settings) -> None:
             "Дальше публикую только новые.",
         )
 
+    async def refresh_after_reconnect(tg_id: int, xuid: str) -> None:
+        """store_identity sets gamerscore = NULL on every connect (it does
+        not know the real value yet) — for a brand-new account backfill()
+        fixes that as a side effect, but a reconnect skips backfill entirely.
+        Without this a person who logs back in sees "0" gamerscore until the
+        next presence event happens to touch title_history (bug found live:
+        justdrunkzero showed 0 right after reconnecting)."""
+        try:
+            await fetcher.refresh_title_history(tg_id, xuid)
+        except Exception:
+            log.exception("post-reconnect title history refresh failed for tg_id=%s", tg_id)
+
     async def on_linked(tg_id: int, identity: XboxIdentity) -> None:
         """Runs in the web callback, right after the account is stored."""
         # No achievements yet means this account is new to the bot, not someone
@@ -116,6 +128,11 @@ async def run(settings: Settings) -> None:
         if is_new:
             await bot.send_message(tg_id, "Читаю твою историю ачивок, это займёт минуту…")
             asyncio.create_task(backfill(tg_id, identity.xuid))  # noqa: RUF006
+        else:
+            # A silent background refresh would leave the panel showing a
+            # stale 0 for a few seconds with nothing telling the user why.
+            await bot.send_message(tg_id, "Обновляю статистику…")
+            asyncio.create_task(refresh_after_reconnect(tg_id, identity.xuid))  # noqa: RUF006
 
     web_server = OAuthServer(settings, connect_service, on_linked)
     await web_server.start()

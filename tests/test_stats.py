@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from bot.db.repo import AchievementRow, Repo
-from bot.services.stats import counters_for, day_start_utc, month_start_utc
+from bot.services.stats import counters_for, month_start_utc, today_cutoff_utc
 
 XUID = "2533274829605736"
 
@@ -24,14 +24,12 @@ def row(achievement_id: str, unlocked_at: str | None, score: int = 10) -> Achiev
     )
 
 
-def test_day_boundary_follows_the_person() -> None:
-    """At 22:00 UTC it is already the third in Omsk and still the second in
-    Rio — the same achievement lands in different days for them."""
+def test_today_is_a_rolling_24_hours_not_a_calendar_day() -> None:
+    """No timezone parameter on purpose: everyone's "today" is the same 24
+    hours, unlike a calendar day (SPEC 5.9, matching the summary's window)."""
     now = datetime(2026, 9, 2, 22, 0, tzinfo=UTC)
-
-    assert day_start_utc(5 * 60, now) == datetime(2026, 9, 2, 19, 0, tzinfo=UTC)
-    assert day_start_utc(-3 * 60, now) == datetime(2026, 9, 2, 3, 0, tzinfo=UTC)
-    assert day_start_utc(None, now) == datetime(2026, 9, 2, 0, 0, tzinfo=UTC)
+    assert today_cutoff_utc(now) == now - timedelta(hours=24)
+    assert today_cutoff_utc(now) == datetime(2026, 9, 1, 22, 0, tzinfo=UTC)
 
 
 def test_month_boundary_follows_the_person() -> None:
@@ -65,6 +63,25 @@ async def test_counters_include_backfilled_rows(repo: Repo) -> None:
     assert (counters.month, counters.month_score) == (2, 20)
     # The undated one counts in the total and nowhere else.
     assert counters.total == 4
+
+
+async def test_counters_today_crosses_midnight_correctly(repo: Repo) -> None:
+    """23 hours ago is still "today" even though it was yesterday on the
+    calendar — and 25 hours ago is not, even on the same calendar day."""
+    now = datetime(2026, 9, 2, 1, 0, tzinfo=UTC)
+    await repo.insert_new_achievements(
+        XUID,
+        [
+            row("late-yesterday", "2026-09-01T02:00:00+00:00", 10),  # 23h ago
+            row("early-today", "2026-09-02T00:30:00+00:00", 20),  # 30m ago
+        ],
+        is_backfill=False,
+    )
+
+    counters = await counters_for(repo, XUID, 0, now)
+
+    assert counters.today == 2
+    assert counters.today_score == 30
 
 
 async def test_counts_by_xuid_covers_everyone_in_one_query(repo: Repo) -> None:

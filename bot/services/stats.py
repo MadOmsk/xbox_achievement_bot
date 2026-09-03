@@ -3,9 +3,11 @@
 Everything is counted from `seen_achievements.unlocked_at` regardless of
 `is_backfill`: that flag means "do not publish", not "did not happen".
 
-Day and month boundaries depend on whose numbers these are — a person sees his
-own day in his own timezone, while a chat-wide table uses one common offset, or
-its rows would not add up.
+"Today" is a rolling 24 hours everywhere in the project, not a calendar day —
+the same reasoning as the chat summary's window (SPEC 5.7): a calendar
+boundary cuts at an arbitrary moment, and people are in different timezones
+with no shared midnight anyway. "Month" is still calendar-based per person's
+own timezone; only the day boundary moved to rolling.
 """
 
 from __future__ import annotations
@@ -31,11 +33,13 @@ def local_now(tz_offset_min: int | None, now: datetime | None = None) -> datetim
     return (now or utcnow()) + timedelta(minutes=tz_offset_min or 0)
 
 
-def day_start_utc(tz_offset_min: int | None, now: datetime | None = None) -> datetime:
-    """Midnight of the person's day, expressed in UTC."""
-    local = local_now(tz_offset_min, now)
-    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
-    return midnight - timedelta(minutes=tz_offset_min or 0)
+def today_cutoff_utc(now: datetime | None = None) -> datetime:
+    """Start of the rolling 24-hour "today" window.
+
+    No timezone parameter: a rolling window does not need one, and that is
+    the point — everyone's "today" is the same 24 hours, unlike a calendar day.
+    """
+    return (now or utcnow()) - timedelta(hours=24)
 
 
 def month_start_utc(tz_offset_min: int | None, now: datetime | None = None) -> datetime:
@@ -47,7 +51,7 @@ def month_start_utc(tz_offset_min: int | None, now: datetime | None = None) -> d
 async def counters_for(
     repo: Repo, xuid: str, tz_offset_min: int | None, now: datetime | None = None
 ) -> Counters:
-    today, today_score = await repo.achievement_counts(xuid, day_start_utc(tz_offset_min, now))
+    today, today_score = await repo.achievement_counts(xuid, today_cutoff_utc(now))
     month, month_score = await repo.achievement_counts(xuid, month_start_utc(tz_offset_min, now))
     total, total_score = await repo.achievement_counts(xuid, None)
     return Counters(today, today_score, month, month_score, total, total_score)
