@@ -16,6 +16,7 @@ one unambiguously.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -75,9 +76,7 @@ async def hltb_command(message: Message, repo: Repo) -> None:
     else:
         text += "\nОтветь на это сообщение (реплаем)."
 
-    prompt = await message.answer(
-        text, reply_markup=_recent_keyboard(recent, 0) if recent else None
-    )
+    prompt = await message.answer(text, reply_markup=_recent_keyboard(recent, 0))
     _sessions[(message.chat.id, prompt.message_id)] = _Session(
         asker_tg_id=message.from_user.id,
         started_at=time.monotonic(),
@@ -104,6 +103,12 @@ def _nav_row(page: int, pages: int, page_prefix: str) -> list[InlineKeyboardButt
     return nav
 
 
+def _cancel_row() -> list[InlineKeyboardButton]:
+    # Every stage of the flow gets this — a person who changed his mind
+    # should not have to just leave the prompt hanging (SPEC 6.6).
+    return [InlineKeyboardButton(text="❌ Отмена", callback_data="hltb:cancel")]
+
+
 def _recent_keyboard(names: list[str], page: int) -> InlineKeyboardMarkup:
     start = page * PAGE_SIZE
     chunk = names[start : start + PAGE_SIZE]
@@ -114,6 +119,7 @@ def _recent_keyboard(names: list[str], page: int) -> InlineKeyboardMarkup:
     pages = -(-len(names) // PAGE_SIZE)
     if pages > 1:
         rows.append(_nav_row(page, pages, "hltb:rpage:"))
+    rows.append(_cancel_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -207,6 +213,7 @@ def _results_keyboard(results: list[HltbResult], page: int) -> InlineKeyboardMar
     pages = -(-len(results) // PAGE_SIZE)
     if pages > 1:
         rows.append(_nav_row(page, pages, "hltb:page:"))
+    rows.append(_cancel_row())
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -217,6 +224,22 @@ def _label(result: HltbResult) -> str:
 @router.callback_query(F.data == "hltb:noop")
 async def hltb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
+
+
+@router.callback_query(F.data == "hltb:cancel")
+async def hltb_cancel(callback: CallbackQuery, bot: Bot) -> None:
+    # Delete rather than edit to "Отменено" — a cancelled flow shouldn't
+    # leave a message behind for no reason (same call as unsubscribe's and
+    # disconnect's cancel, SPEC 6.3). Open to anyone on the message, not just
+    # the asker: same reasoning as picking a result or paging — no side
+    # effect beyond ending a shared, harmless search session.
+    if not isinstance(callback.message, Message):
+        return
+    chat_id, message_id = callback.message.chat.id, callback.message.message_id
+    _sessions.pop((chat_id, message_id), None)
+    await callback.answer()
+    with contextlib.suppress(Exception):
+        await bot.delete_message(chat_id, message_id)
 
 
 @router.callback_query(F.data.startswith("hltb:page:"))

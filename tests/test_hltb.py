@@ -83,19 +83,20 @@ def test_results_keyboard_paginates_five_per_page_with_nav() -> None:
     results = [result(hltb_id=i) for i in range(1, 13)]  # 12 -> 3 pages
 
     page0 = _results_keyboard(results, 0)
-    assert len(page0.inline_keyboard) == 6  # 5 picks + one nav row
-    nav0 = page0.inline_keyboard[-1]
+    assert len(page0.inline_keyboard) == 7  # 5 picks + one nav row + cancel
+    assert page0.inline_keyboard[-1][0].callback_data == "hltb:cancel"
+    nav0 = page0.inline_keyboard[-2]
     assert [b.callback_data for b in nav0] == ["hltb:noop", "hltb:page:1"]  # no "back" on page 0
     assert nav0[0].text == "1/3"  # the page counter's label, not its (inert) callback_data
 
     page1 = _results_keyboard(results, 1)
-    nav1 = page1.inline_keyboard[-1]
+    nav1 = page1.inline_keyboard[-2]
     assert [b.callback_data for b in nav1] == ["hltb:page:0", "hltb:noop", "hltb:page:2"]
     assert nav1[1].text == "2/3"
 
     page2 = _results_keyboard(results, 2)
-    assert len(page2.inline_keyboard) == 3  # only 2 leftover picks + nav
-    nav2 = page2.inline_keyboard[-1]
+    assert len(page2.inline_keyboard) == 4  # 2 leftover picks + nav + cancel
+    nav2 = page2.inline_keyboard[-2]
     # no "forward" button on the last page
     assert [b.callback_data for b in nav2] == ["hltb:page:1", "hltb:noop"]
 
@@ -103,8 +104,16 @@ def test_results_keyboard_paginates_five_per_page_with_nav() -> None:
 def test_results_keyboard_has_no_nav_row_for_a_single_page() -> None:
     results = [result(hltb_id=i) for i in range(1, 4)]
     markup = _results_keyboard(results, 0)
-    assert len(markup.inline_keyboard) == 3
-    assert all(row[0].callback_data.startswith("hltb:pick:") for row in markup.inline_keyboard)
+    assert len(markup.inline_keyboard) == 4  # 3 picks + cancel, no nav
+    picks, cancel = markup.inline_keyboard[:3], markup.inline_keyboard[3]
+    assert all(row[0].callback_data.startswith("hltb:pick:") for row in picks)
+    assert cancel[0].callback_data == "hltb:cancel"
+
+
+def test_every_keyboard_offers_a_cancel_button() -> None:
+    assert _results_keyboard([result()], 0).inline_keyboard[-1][0].callback_data == "hltb:cancel"
+    assert _recent_keyboard(["A"], 0).inline_keyboard[-1][0].callback_data == "hltb:cancel"
+    assert _recent_keyboard([], 0).inline_keyboard[-1][0].callback_data == "hltb:cancel"
 
 
 def test_recent_keyboard_paginates_with_absolute_indices() -> None:
@@ -116,7 +125,7 @@ def test_recent_keyboard_paginates_with_absolute_indices() -> None:
     assert [row[0].callback_data for row in page0.inline_keyboard[:5]] == [
         f"hltb:qr:{i}" for i in range(5)
     ]
-    nav0 = page0.inline_keyboard[-1]
+    nav0 = page0.inline_keyboard[-2]
     assert [b.callback_data for b in nav0] == ["hltb:noop", "hltb:rpage:1"]
 
     page2 = _recent_keyboard(names, 2)
@@ -124,13 +133,13 @@ def test_recent_keyboard_paginates_with_absolute_indices() -> None:
         "hltb:qr:10",
         "hltb:qr:11",
     ]
-    nav2 = page2.inline_keyboard[-1]
+    nav2 = page2.inline_keyboard[-2]
     assert [b.callback_data for b in nav2] == ["hltb:rpage:1", "hltb:noop"]
 
 
 def test_recent_keyboard_has_no_nav_row_for_a_single_page() -> None:
     markup = _recent_keyboard(["A", "B"], 0)
-    assert len(markup.inline_keyboard) == 2
+    assert len(markup.inline_keyboard) == 3  # 2 games + cancel, no nav
 
 
 async def test_recent_games_limit_is_admin_configurable(repo: Repo) -> None:
