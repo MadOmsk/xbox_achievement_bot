@@ -195,6 +195,15 @@ class HltbCacheRow:
     platforms: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class PlatformLink:
+    tg_id: int
+    platform: str
+    external_id: str
+    display_name: str | None
+    linked_at: str
+
+
 class Database:
     """Owns the connection and brings the file up to the current schema."""
 
@@ -1160,6 +1169,62 @@ class Repo:
                 json.dumps(entry.platforms),
                 utcnow_iso(),
             ),
+        )
+        await self._conn.commit()
+
+    async def link_platform_account(
+        self, tg_id: int, platform: str, external_id: str, display_name: str | None
+    ) -> None:
+        """One row per (person, platform) — a second /connect_steam replaces
+        the link, same as reconnecting Xbox replaces the old identity."""
+        await self._conn.execute(
+            "INSERT INTO platform_links (tg_id, platform, external_id, display_name, linked_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(tg_id, platform) DO UPDATE SET "
+            "  external_id = excluded.external_id,"
+            "  display_name = excluded.display_name,"
+            "  linked_at = excluded.linked_at",
+            (tg_id, platform, external_id, display_name, utcnow_iso()),
+        )
+        await self._conn.commit()
+
+    async def get_platform_link(self, tg_id: int, platform: str) -> PlatformLink | None:
+        cursor = await self._conn.execute(
+            "SELECT tg_id, platform, external_id, display_name, linked_at "
+            "FROM platform_links WHERE tg_id = ? AND platform = ?",
+            (tg_id, platform),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return PlatformLink(
+            tg_id=row["tg_id"],
+            platform=row["platform"],
+            external_id=row["external_id"],
+            display_name=row["display_name"],
+            linked_at=row["linked_at"],
+        )
+
+    async def platform_links_of(self, tg_id: int) -> list[PlatformLink]:
+        cursor = await self._conn.execute(
+            "SELECT tg_id, platform, external_id, display_name, linked_at "
+            "FROM platform_links WHERE tg_id = ?",
+            (tg_id,),
+        )
+        return [
+            PlatformLink(
+                tg_id=row["tg_id"],
+                platform=row["platform"],
+                external_id=row["external_id"],
+                display_name=row["display_name"],
+                linked_at=row["linked_at"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def unlink_platform_account(self, tg_id: int, platform: str) -> None:
+        await self._conn.execute(
+            "DELETE FROM platform_links WHERE tg_id = ? AND platform = ?", (tg_id, platform)
         )
         await self._conn.commit()
 

@@ -32,6 +32,7 @@
 │   │   ├── chat.py              — команды группового чата: /subscribe, /stats,
 │   │   │                          /online, /who, /recent, /summary, хаб группы
 │   │   ├── hltb.py              — /hltb, поиск времени прохождения (SPEC 6.6)
+│   │   ├── steam.py             — /connect_steam, /disconnect_steam (M-Steam-1)
 │   │   └── keyboards.py         — инлайн-клавиатуры, общие для панелей и онбординга
 │   │
 │   ├── services/                — бизнес-логика, не знает про Telegram/aiogram
@@ -43,10 +44,12 @@
 │   │   ├── message_log.py        — request-мидлварь: лог исходящих сообщений в группы
 │   │   ├── notify.py             — уведомления администратору
 │   │   ├── crypto.py             — шифрование refresh-токенов (Fernet)
-│   │   └── xbox/                 — всё про Xbox Live, ничего про Telegram
-│   │       ├── auth.py            — обёртка над xbox-webapi-python: токены, обновление
-│   │       ├── client.py          — запросы к Xbox Live, лимитер, retry, backoff
-│   │       └── models.py          — pydantic-модели ответов (в т.ч. контракт 4 с редкостью)
+│   │   ├── xbox/                 — всё про Xbox Live, ничего про Telegram
+│   │   │   ├── auth.py            — обёртка над xbox-webapi-python: токены, обновление
+│   │   │   ├── client.py          — запросы к Xbox Live, лимитер, retry, backoff
+│   │   │   └── models.py          — pydantic-модели ответов (в т.ч. контракт 4 с редкостью)
+│   │   └── steam/                — официальный Steam Web API, без OAuth (M-Steam-1)
+│   │       └── client.py          — резолв профиля, видимость; не проверено на живом ключе
 │   │
 │   ├── poller/                  — фоновые задачи (APScheduler)
 │   │   ├── scheduler.py           — тики, сборка джобов
@@ -68,7 +71,8 @@
 │           ├── 003_chat_seen.sql           — кто писал в чате, не только подписчики публикации
 │           ├── 004_hltb_cache.sql
 │           ├── 005_bot_messages.sql        — лог исходящих сообщений бота (для очистки чата)
-│           └── 006_hltb_platforms.sql      — платформы игры в hltb_cache
+│           ├── 006_hltb_platforms.sql      — платформы игры в hltb_cache
+│           └── 007_platform_links.sql      — привязка Steam/PSN аккаунтов (M-Steam-1)
 │
 ├── scripts/                    — вспомогательные скрипты вне приложения, разовые/ручные
 │   ├── db_status.py              — сводка по базе для `manage.ps1 status` (без зависимостей)
@@ -97,6 +101,7 @@
 │   ├── test_notify.py             — уведомления администратору
 │   ├── test_message_log.py        — лог сообщений бота, фильтр по типу чата
 │   ├── test_hltb.py               — поиск/кэш HLTB, пагинация, очистка запроса
+│   ├── test_steam.py              — разбор ссылки/ID, привязка аккаунта (M-Steam-1)
 │   ├── test_rate_limiter.py       — снимок использования лимитера без учёта самого себя
 │   └── test_util.py               — маскирование секретов, форматирование чисел
 │

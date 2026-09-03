@@ -37,17 +37,19 @@ bot/
     admin.py         админ-панель
     chat.py          /subscribe, /stats, /online, /who, /recent, /summary
     hltb.py          /hltb — поиск времени прохождения (SPEC 6.6)
+    steam.py         /connect_steam, /disconnect_steam — привязка аккаунта (M-Steam-1)
     keyboards.py     инлайн-клавиатуры, общие для панелей и онбординга
   services/
     xbox/
       auth.py        обёртка над xbox-webapi-python: хранение и обновление токенов
       client.py      запросы к Xbox Live, лимитер, retry, backoff
       models.py      pydantic-модели ответов (в т.ч. контракт 4 с редкостью)
+    steam/
+      client.py      официальный Steam Web API — резолв профиля, видимость (M-Steam-1)
     achievements.py  фильтрация и формирование сообщений
     connect.py       одноразовый state для OAuth, завершение входа
     stats.py         агрегаты для панелей, /stats, итога дня (без /compare, /top — убраны)
     hltb.py          обёртка над howlongtobeatpy, кэш в hltb_cache (SPEC 6.6)
-    settings.py      глобальные настройки, настройки юзера и чата
     crypto.py        шифрование токенов
   poller/
     scheduler.py     тики APScheduler

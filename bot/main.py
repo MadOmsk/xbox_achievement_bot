@@ -22,6 +22,7 @@ from bot.handlers import chat as chat_handlers
 from bot.handlers import connect as connect_handlers
 from bot.handlers import hltb as hltb_handlers
 from bot.handlers import panel as panel_handlers
+from bot.handlers import steam as steam_handlers
 from bot.handlers.chat import UsernameMiddleware
 from bot.handlers.keyboards import timezone_keyboard
 from bot.lock import AlreadyRunningError, single_instance
@@ -175,6 +176,7 @@ async def run(settings: Settings) -> None:
     dispatcher.include_router(panel_handlers.router)
     dispatcher.include_router(chat_handlers.router)
     dispatcher.include_router(hltb_handlers.router)
+    dispatcher.include_router(steam_handlers.router)
 
     async def startup_catch_up() -> None:
         """Pick up what happened while the bot was down (SPEC 5.8).
@@ -227,6 +229,8 @@ async def _publish_command_menu(bot: Bot) -> None:
         BotCommand(command="stats", description="Моя статистика"),
         BotCommand(command="connect", description="Подключить Xbox"),
         BotCommand(command="disconnect", description="Отключить Xbox"),
+        BotCommand(command="connect_steam", description="Подключить Steam"),
+        BotCommand(command="disconnect_steam", description="Отключить Steam"),
         BotCommand(command="hltb", description="Сколько идти игру (HowLongToBeat)"),
         BotCommand(command="help", description="Что я умею"),
     ]

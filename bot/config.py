@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Token encryption at rest
     fernet_key: SecretStr
 
+    # Steam (optional — /connect_steam answers "not configured" without it;
+    # unlike Xbox this needs no per-user OAuth, just one key for the whole
+    # bot). Get one at https://steamcommunity.com/dev/apikey.
+    steam_api_key: SecretStr | None = None
+
     # Poller intervals, seconds (SPEC 5.2, 5.3)
     presence_interval_in_game: int = 60
     presence_interval_online: int = 120
