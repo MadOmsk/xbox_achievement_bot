@@ -77,6 +77,26 @@ manage.ps1           запуск/остановка/статус бота на 
 Логи — `logs/bot.log`, ошибки — `logs/bot.err.log`. На боевом сервере эту роль
 берёт на себя systemd.
 
+**Боевой сервер** — VPS (DigitalOcean, Amsterdam), `xbox.sultanpharm.com`,
+Ubuntu 24.04. Код в `/opt/xbox_achievement_bot`, сервис — `xbox-bot.service`
+(отдельный непривилегированный юзер `botsvc`, автозапуск включён):
+
+```
+systemctl {start|stop|restart|status} xbox-bot
+journalctl -u xbox-bot -f
+```
+
+nginx на 443 (сертификат Let's Encrypt, автопродление через certbot-таймер)
+проксирует на `127.0.0.1:8080`, где слушает колбэк бота — наружу порт 8080
+не открыт, `OAUTH_LISTEN_HOST=127.0.0.1` в `.env` сервера. Git на сервере ходит
+по deploy key (read-only, `Settings → Deploy keys` в GitHub), не по токену
+аккаунта.
+
+**Одновременно с этим `manage.ps1` на домашнем ПК не запускать** — два
+процесса с одним `BOT_TOKEN` дерутся за обновления Telegram. Домашний ПК —
+только для разработки; локальный `.env` при этом смотрит на `localhost` или
+временный туннель, а не на боевой домен.
+
 **`.\manage.ps1 dashboard`** (или просто `manage.bat` двойным кликом — им
 теперь запускается дашборд, а не старое меню с цифрами) — живой статус в
 консоли: тот же блок, что и `status`, плюс хвост `bot.log`, весь экран
