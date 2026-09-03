@@ -11,14 +11,17 @@
     .\manage.ps1 start
     .\manage.ps1 status
     .\manage.ps1 logs -Lines 50
+    .\manage.ps1 dashboard -RefreshSeconds 5
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'menu')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'menu', 'dashboard')]
     [string]$Command = 'status',
 
-    [int]$Lines = 20
+    [int]$Lines = 20,
+
+    [int]$RefreshSeconds = 5
 )
 
 $ErrorActionPreference = 'Stop'
@@ -91,7 +94,9 @@ function Stop-Bot {
     Write-Host "Остановил PID $($process.ProcessId)." -ForegroundColor Green
 }
 
-function Show-Status {
+function Write-StatusBlock {
+    # Shared by `status` (one shot) and `dashboard` (redrawn every tick), so
+    # the two never drift into showing different things for the same state.
     $process = Get-BotProcess
     if ($process) {
         $started = $process.CreationDate
@@ -127,7 +132,10 @@ function Show-Status {
         # Russian summary arrives as mojibake.
         & $Python -X utf8 (Join-Path $Root 'scripts\db_status.py')
     }
+}
 
+function Show-Status {
+    Write-StatusBlock
     if (Test-Path $LogFile) {
         Write-Host ''
         Write-Host "Последние строки лога:" -ForegroundColor Cyan
@@ -135,42 +143,72 @@ function Show-Status {
     }
 }
 
-function Show-Menu {
-    # Reached by double-clicking manage.bat, where a window that ran one command
-    # and closed would tell the user nothing.
-    while ($true) {
-        Write-Host ''
-        Write-Host '===============================' -ForegroundColor Cyan
-        Write-Host '  Xbox Achievement Bot'          -ForegroundColor Cyan
-        Write-Host '===============================' -ForegroundColor Cyan
-        Write-Host '  1  статус'
-        Write-Host '  2  запустить'
-        Write-Host '  3  остановить'
-        Write-Host '  4  перезапустить'
-        Write-Host '  5  логи (30 строк)'
-        Write-Host '  0  выход'
-        Write-Host ''
-        $answer = Read-Host 'Что делаем?'
-        Write-Host ''
-        switch ($answer) {
-            '1' { Show-Status }
-            '2' { Start-Bot }
-            '3' { Stop-Bot }
-            '4' { Stop-Bot; Start-Sleep -Seconds 1; Start-Bot }
-            '5' { if (Test-Path $LogFile) { Get-Content $LogFile -Tail 30 } else { Write-Host 'Логов пока нет.' } }
-            '0' { return }
-            default { Write-Host 'Не понял. Нужна цифра из списка.' -ForegroundColor Yellow }
+function Test-HotkeyPressed {
+    # Reading the console can throw when there isn't one — piped output,
+    # a non-interactive host. Dashboard mode degrades to a plain auto-refresh
+    # in that case instead of crashing.
+    try { return [Console]::KeyAvailable } catch { return $false }
+}
+
+function Show-Dashboard {
+    # Clear-Host + full redraw, not cursor-position tricks: the flicker is a
+    # non-issue at a multi-second cadence, and Clear-Host behaves the same in
+    # cmd, PowerShell and every terminal host, which cursor repositioning does
+    # not. CIM/port queries alone cost tens of milliseconds each — enough that
+    # polling them many times a second would be wasteful for no visible gain.
+    $tickMs = 200
+    try { [Console]::CursorVisible = $false } catch {}
+    try {
+        while ($true) {
+            Clear-Host
+            Write-Host '=== Xbox Achievement Bot ===' -ForegroundColor Cyan
+            Write-Host (Get-Date -Format 'HH:mm:ss') -ForegroundColor DarkGray
+            Write-Host ''
+            Write-StatusBlock
+            Write-Host ''
+            Write-Host '[2] Запустить   [3] Остановить   [4] Перезапустить   [Q] Выход' -ForegroundColor Cyan
+            Write-Host ("Обновление каждые {0} с." -f $RefreshSeconds) -ForegroundColor DarkGray
+
+            if (Test-Path $LogFile) {
+                Write-Host ''
+                Write-Host '--- Последние строки лога ---' -ForegroundColor Cyan
+                Get-Content $LogFile -Tail 12
+            }
+
+            $elapsedMs = 0
+            $acted = $false
+            while ($elapsedMs -lt ($RefreshSeconds * 1000) -and -not $acted) {
+                if (Test-HotkeyPressed) {
+                    $key = [Console]::ReadKey($true)
+                    switch ($key.KeyChar) {
+                        '2' { Write-Host ''; Start-Bot; $acted = $true }
+                        '3' { Write-Host ''; Stop-Bot; $acted = $true }
+                        '4' { Write-Host ''; Stop-Bot; Start-Sleep -Seconds 1; Start-Bot; $acted = $true }
+                        'q' { return }
+                        'Q' { return }
+                        default {}
+                    }
+                }
+                Start-Sleep -Milliseconds $tickMs
+                $elapsedMs += $tickMs
+            }
+            # Let the operator read what the action itself printed before the
+            # next redraw wipes it.
+            if ($acted) { Start-Sleep -Seconds 2 }
         }
+    } finally {
+        try { [Console]::CursorVisible = $true } catch {}
     }
 }
 
 switch ($Command) {
-    'menu'    { Show-Menu }
-    'start'   { Start-Bot }
-    'stop'    { Stop-Bot }
-    'restart' { Stop-Bot; Start-Sleep -Seconds 1; Start-Bot }
-    'status'  { Show-Status }
-    'logs'    {
+    'menu'      { Show-Dashboard }
+    'dashboard' { Show-Dashboard }
+    'start'     { Start-Bot }
+    'stop'      { Stop-Bot }
+    'restart'   { Stop-Bot; Start-Sleep -Seconds 1; Start-Bot }
+    'status'    { Show-Status }
+    'logs'      {
         if (-not (Test-Path $LogFile)) { Write-Host 'Логов пока нет.'; break }
         Get-Content $LogFile -Tail $Lines
         if ((Test-Path $ErrFile) -and (Get-Item $ErrFile).Length -gt 0) {
