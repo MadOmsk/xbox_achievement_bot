@@ -20,6 +20,7 @@ from bot.db.repo import Database, Repo
 from bot.handlers import admin as admin_handlers
 from bot.handlers import chat as chat_handlers
 from bot.handlers import connect as connect_handlers
+from bot.handlers import hltb as hltb_handlers
 from bot.handlers import panel as panel_handlers
 from bot.handlers.chat import UsernameMiddleware
 from bot.handlers.keyboards import timezone_keyboard
@@ -168,6 +169,7 @@ async def run(settings: Settings) -> None:
     dispatcher.include_router(connect_handlers.router)
     dispatcher.include_router(panel_handlers.router)
     dispatcher.include_router(chat_handlers.router)
+    dispatcher.include_router(hltb_handlers.router)
 
     async def startup_catch_up() -> None:
         """Pick up what happened while the bot was down (SPEC 5.8).
@@ -220,6 +222,7 @@ async def _publish_command_menu(bot: Bot) -> None:
         BotCommand(command="stats", description="Моя статистика"),
         BotCommand(command="connect", description="Подключить Xbox"),
         BotCommand(command="disconnect", description="Отключить Xbox"),
+        BotCommand(command="hltb", description="Сколько идти игру (HowLongToBeat)"),
         BotCommand(command="help", description="Что я умею"),
     ]
     group = [
@@ -228,6 +231,7 @@ async def _publish_command_menu(bot: Bot) -> None:
         BotCommand(command="who", description="Узнать стату юзера"),
         BotCommand(command="recent", description="Последние ачивки чата"),
         BotCommand(command="summary", description="Сводка за сутки и за месяц"),
+        BotCommand(command="hltb", description="Сколько идти игру (HowLongToBeat)"),
         BotCommand(command="subscribe", description="Публиковать мои ачивки здесь"),
         BotCommand(command="unsubscribe", description="Перестать публиковать"),
         BotCommand(command="help", description="Что я умею"),

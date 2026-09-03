@@ -32,7 +32,8 @@ bot/
     connect.py       /start, /connect, /disconnect
     panel.py         панель пользователя
     admin.py         админ-панель
-    chat.py          /subscribe, /stats, /compare, /top, /recent
+    chat.py          /subscribe, /stats, /online, /who, /recent, /summary
+    hltb.py          /hltb — поиск времени прохождения (SPEC 6.6)
     keyboards.py     инлайн-клавиатуры, общие для панелей и онбординга
   services/
     xbox/
@@ -41,7 +42,8 @@ bot/
       models.py      pydantic-модели ответов (в т.ч. контракт 4 с редкостью)
     achievements.py  фильтрация и формирование сообщений
     connect.py       одноразовый state для OAuth, завершение входа
-    stats.py         агрегаты для панелей, /stats, /compare, /top, итога дня
+    stats.py         агрегаты для панелей, /stats, итога дня (без /compare, /top — убраны)
+    hltb.py          обёртка над howlongtobeatpy, кэш в hltb_cache (SPEC 6.6)
     settings.py      глобальные настройки, настройки юзера и чата
     crypto.py        шифрование токенов
   poller/

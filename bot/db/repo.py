@@ -177,6 +177,16 @@ class TitleHistoryRow:
     last_played_at: str | None
 
 
+@dataclass(slots=True)
+class HltbCacheRow:
+    hltb_id: int
+    name: str
+    release_year: int | None
+    main_hours: float | None
+    extra_hours: float | None
+    completionist_hours: float | None
+
+
 class Database:
     """Owns the connection and brings the file up to the current schema."""
 
@@ -926,6 +936,31 @@ class Repo:
             for row in await cursor.fetchall()
         ]
 
+    async def chat_recent_games(self, chat_id: int, limit: int = 10) -> list[str]:
+        """Distinct game names the chat's known members have actually played
+        recently, most-recent first — quick-pick shortcuts for /hltb so the
+        common case ("what does everyone here keep talking about") needs no
+        typing at all (SPEC 6.6). Same membership as /online and /who: the
+        union of who publishes here and who's just been seen writing here,
+        not only publishers."""
+        cursor = await self._conn.execute(
+            "SELECT t.name AS name, MAX(th.last_played_at) AS last_played "
+            "FROM title_history th "
+            "JOIN titles t ON t.title_id = th.title_id "
+            "WHERE th.xuid IN ("
+            "  SELECT u.xuid FROM users u "
+            "  WHERE u.xuid IS NOT NULL AND u.tg_id IN ("
+            "    SELECT tg_id FROM subscriptions WHERE chat_id = ? "
+            "    UNION "
+            "    SELECT tg_id FROM chat_seen WHERE chat_id = ?"
+            "  )"
+            ") AND th.last_played_at IS NOT NULL "
+            "GROUP BY t.name "
+            "ORDER BY last_played DESC LIMIT ?",
+            (chat_id, chat_id, limit),
+        )
+        return [row["name"] for row in await cursor.fetchall() if row["name"]]
+
     async def find_user_by_username(self, username: str) -> User | None:
         cursor = await self._conn.execute(
             "SELECT * FROM users WHERE lower(username) = lower(?)", (username.lstrip("@"),)
@@ -1042,6 +1077,44 @@ class Repo:
         cursor = await self._conn.execute("SELECT name FROM titles WHERE title_id = ?", (title_id,))
         row = await cursor.fetchone()
         return row["name"] if row else None
+
+    async def hltb_get_cached(self, hltb_id: int) -> HltbCacheRow | None:
+        cursor = await self._conn.execute(
+            "SELECT hltb_id, name, release_year, main_hours, extra_hours, completionist_hours "
+            "FROM hltb_cache WHERE hltb_id = ?",
+            (hltb_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return HltbCacheRow(
+            hltb_id=row["hltb_id"],
+            name=row["name"],
+            release_year=row["release_year"],
+            main_hours=row["main_hours"],
+            extra_hours=row["extra_hours"],
+            completionist_hours=row["completionist_hours"],
+        )
+
+    async def hltb_cache_result(self, entry: HltbCacheRow) -> None:
+        """Cached forever (SPEC 6.6) — only called once someone actually
+        picks a search result, never for the rest of the candidate list."""
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO hltb_cache "
+            "(hltb_id, name, release_year, main_hours, extra_hours, completionist_hours,"
+            " cached_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                entry.hltb_id,
+                entry.name,
+                entry.release_year,
+                entry.main_hours,
+                entry.extra_hours,
+                entry.completionist_hours,
+                utcnow_iso(),
+            ),
+        )
+        await self._conn.commit()
 
 
 def _as_user(row: aiosqlite.Row) -> User:
