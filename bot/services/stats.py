@@ -25,8 +25,9 @@ class Counters:
     today_score: int = 0
     month: int = 0
     month_score: int = 0
-    total: int = 0
-    total_score: int = 0
+    # No lifetime total: seen_achievements is permanently best-effort (a
+    # capped title_history, achievements with no unlock date), unlike these
+    # two date-bounded counts — better absent than quietly wrong (SPEC 5.4).
 
 
 def local_now(tz_offset_min: int | None, now: datetime | None = None) -> datetime:
@@ -53,8 +54,7 @@ async def counters_for(
 ) -> Counters:
     today, today_score = await repo.achievement_counts(xuid, today_cutoff_utc(now))
     month, month_score = await repo.achievement_counts(xuid, month_start_utc(tz_offset_min, now))
-    total, total_score = await repo.achievement_counts(xuid, None)
-    return Counters(today, today_score, month, month_score, total, total_score)
+    return Counters(today, today_score, month, month_score)
 
 
 async def global_offset_minutes(repo: Repo) -> int:

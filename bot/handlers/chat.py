@@ -36,7 +36,7 @@ from bot.services.achievements import (
     rarity_badge,
 )
 from bot.services.stats import counters_for, global_offset_minutes, local_now
-from bot.services.tables import render_table, total_line
+from bot.services.tables import render_table
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -181,7 +181,10 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
         "",
         f"Сегодня:   {plural_achievements(counters.today)} (+{counters.today_score} G)",
         f"За месяц:  {plural_achievements(counters.month)} (+{thousands(counters.month_score)} G)",
-        total_line("Всего", plural_achievements(counters.total)),
+        # No lifetime "Всего" here: seen_achievements is permanently
+        # best-effort (title_history's cap, achievements with no unlock
+        # date), so a lifetime count from it can't be trusted the way a
+        # date-bounded one can — better absent than quietly wrong (SPEC 5.4).
     ]
 
     games = await repo.recent_games(target.xuid, utcnow() - timedelta(days=RECENT_GAMES_DAYS))

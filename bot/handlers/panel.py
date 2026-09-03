@@ -252,7 +252,8 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         f"Сегодня:     {plural_achievements(counters.today)} (+{counters.today_score} G)",
         f"За месяц:    {plural_achievements(counters.month)} "
         f"(+{thousands(counters.month_score)} G)",
-        f"Всего:       {plural_achievements(counters.total)}",
+        # No lifetime "Всего": seen_achievements is permanently best-effort
+        # (SPEC 5.4), unlike the two date-bounded counters above it.
         "",
         f"Часовой пояс: {format_offset(tz_offset)}",
     ]

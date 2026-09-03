@@ -398,8 +398,9 @@ async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
         f"Вход:      {login}\n"
         f"В сети:    {online}\n"
         f"Подписан:  {', '.join(f'«{c}»' for c in chats) if chats else 'нигде'}\n"
-        f"Ачивок:    сегодня {counters.today} · за месяц {counters.month} · "
-        f"всего {counters.total}"
+        # No lifetime total here: seen_achievements is permanently
+        # best-effort (SPEC 5.4), unlike these two date-bounded counters.
+        f"Ачивок:    сегодня {counters.today} · за месяц {counters.month}"
     )
     if user.is_excluded:
         text += "\n\n🚫 Исключён из системы: не опрашивается и не публикуется."

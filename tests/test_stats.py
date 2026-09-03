@@ -61,8 +61,10 @@ async def test_counters_include_backfilled_rows(repo: Repo) -> None:
 
     assert (counters.today, counters.today_score) == (1, 15)
     assert (counters.month, counters.month_score) == (2, 20)
-    # The undated one counts in the total and nowhere else.
-    assert counters.total == 4
+    # Counters has no lifetime total (SPEC 5.4, best-effort forever) — but
+    # the repo-level, unbounded count (used only by the reconciliation
+    # script, never displayed) still sees the backfilled and undated rows.
+    assert await repo.achievement_counts(XUID, None) == (4, 90)
 
 
 async def test_counters_today_crosses_midnight_correctly(repo: Repo) -> None:
