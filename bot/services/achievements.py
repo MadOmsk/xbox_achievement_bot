@@ -5,6 +5,8 @@ No I/O here: the poller decides when, this module decides whether and how.
 
 from __future__ import annotations
 
+from html import escape as html_escape
+
 from bot.db.repo import AchievementRow, ChatTarget, UserSettings
 from bot.util import thousands
 
@@ -78,18 +80,31 @@ def platform_note(platform: str, rarity_percent: float | None) -> str:
     return f" · {rarity_percent:g}%"
 
 
+def _spoiler(text: str, *, secret: bool) -> str:
+    """Wraps already-escaped HTML text in a Telegram spoiler (SPEC 5.5, 7.1).
+
+    Xbox's own isSecret does not redact name/description — found live, they
+    carry the real, spoiler-containing text even while still locked. Hiding
+    it from chat members who haven't unlocked (or don't want to know) it is
+    entirely this bot's own doing, not something Microsoft did for us.
+    """
+    return f'<span class="tg-spoiler">{text}</span>' if secret else text
+
+
 def format_single(gamertag: str, achievement: AchievementRow, title_name: str | None) -> str:
     title = title_name or achievement.title_name or "неизвестная игра"
-    parts = [title, f"{achievement.gamerscore} G"]
+    parts = [html_escape(title), f"{achievement.gamerscore} G"]
     if achievement.platform == "x360":
         parts.append("Xbox 360")
     elif achievement.rarity_percent is not None:
         badge = rarity_badge(achievement.rarity_percent)
         parts.append(f"редкость {achievement.rarity_percent:g}%{' ' + badge if badge else ''}")
 
-    text = f"🏆 {gamertag} выбил «{achievement.name}»\n{' · '.join(parts)}"
+    name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
+    text = f"🏆 {html_escape(gamertag)} выбил «{name}»\n{' · '.join(parts)}"
     if achievement.description:
-        text += f"\n\n{achievement.description}"
+        description = _spoiler(html_escape(achievement.description), secret=achievement.is_secret)
+        text += f"\n\n{description}"
     return text
 
 
@@ -99,15 +114,16 @@ def format_digest(gamertag: str, title_name: str | None, achievements: list[Achi
     )
     total_score = sum(a.gamerscore for a in achievements)
     header = (
-        f"🎮 {gamertag}, {title} — {plural_achievements(len(achievements))} "
-        f"за сессию (+{total_score} G)"
+        f"🎮 {html_escape(gamertag)}, {html_escape(title)} — "
+        f"{plural_achievements(len(achievements))} за сессию (+{total_score} G)"
     )
 
     lines = [header, ""]
     for achievement in achievements[:DIGEST_PREVIEW]:
         badge = rarity_badge(achievement.rarity_percent) or "·"
         tail = platform_note(achievement.platform, achievement.rarity_percent)
-        lines.append(f"{badge} {achievement.name} · {achievement.gamerscore} G{tail}")
+        name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
+        lines.append(f"{badge} {name} · {achievement.gamerscore} G{tail}")
 
     remaining = len(achievements) - DIGEST_PREVIEW
     if remaining > 0:

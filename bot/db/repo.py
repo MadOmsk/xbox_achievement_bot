@@ -94,6 +94,7 @@ class AchievementRow:
     rarity_percent: float | None
     platform: str
     title_name: str | None = None
+    is_secret: bool = False
 
 
 @dataclass(slots=True)
@@ -575,8 +576,8 @@ class Repo:
             cursor = await self._conn.execute(
                 "INSERT OR IGNORE INTO seen_achievements "
                 "(xuid, title_id, achievement_id, name, description, icon_url, unlocked_at,"
-                " gamerscore, rarity_percent, platform, is_backfill, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " gamerscore, rarity_percent, platform, is_backfill, is_secret, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     xuid,
                     item.title_id,
@@ -589,6 +590,7 @@ class Repo:
                     item.rarity_percent,
                     item.platform,
                     1 if is_backfill else 0,
+                    1 if item.is_secret else 0,
                     now,
                 ),
             )
@@ -624,6 +626,7 @@ class Repo:
                 rarity_percent=row["rarity_percent"],
                 platform=row["platform"],
                 title_name=row["game"],
+                is_secret=bool(row["is_secret"]),
             )
             for row in await cursor.fetchall()
         ]

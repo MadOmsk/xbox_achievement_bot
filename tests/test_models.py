@@ -16,6 +16,7 @@ MODERN = {
             "rewards": [{"type": "Gamerscore", "value": "10"}],
             "rarity": {"currentCategory": "Common", "currentPercentage": 65.41},
             "titleAssociations": [{"name": "Gears of War: Reloaded", "id": 1829869520}],
+            "isSecret": True,
         },
         {
             "id": "5",
@@ -55,6 +56,31 @@ def test_modern_parses_rarity_and_icon() -> None:
     assert item.title_id == "1829869520"
     assert item.title_name == "Gears of War: Reloaded"
     assert item.platform == "modern"
+    assert item.is_secret is True
+
+
+def test_missing_is_secret_defaults_to_false() -> None:
+    """Most achievements have no isSecret field at all — absence must not be
+    mistaken for "yes, secret"."""
+    payload = {
+        "achievements": [
+            {
+                "id": "9",
+                "name": "Ordinary",
+                "progressState": "Achieved",
+                "progression": {"timeUnlocked": "2025-01-01T00:00:00.0000000Z"},
+                "rewards": [{"type": "Gamerscore", "value": "5"}],
+                "titleAssociations": [{"name": "Some Game", "id": 1}],
+            }
+        ]
+    }
+    assert parse_achievements(payload, "modern")[0].is_secret is False
+
+
+def test_x360_is_never_secret() -> None:
+    """Contract 1 has no isSecret concept at all — X360Achievement.to_parsed()
+    always defaults it to False."""
+    assert parse_achievements(X360, "x360", "1297287339")[0].is_secret is False
 
 
 def test_in_progress_never_becomes_a_row() -> None:

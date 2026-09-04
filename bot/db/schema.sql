@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS seen_achievements (
     platform        TEXT NOT NULL DEFAULT 'modern'
                     CHECK (platform IN ('modern', 'x360')),
     is_backfill     INTEGER NOT NULL DEFAULT 0,  -- arrived via backfill, never published
+    is_secret       INTEGER NOT NULL DEFAULT 0,  -- Xbox's own isSecret; name/description are
+                                                  -- real either way, we're the ones who spoiler it
     created_at      TEXT NOT NULL,
     PRIMARY KEY (xuid, title_id, achievement_id)
 );

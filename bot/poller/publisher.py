@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, field
 
 from aiogram import Bot
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from bot.db.repo import AchievementRow, Repo
@@ -28,6 +29,9 @@ class PublishJob:
     xuid: str
     text: str
     photo_url: str | None
+    # Only meaningful with photo_url set — a secret achievement's icon
+    # (SPEC 5.5, 7.1) can be as much of a spoiler as its name.
+    photo_has_spoiler: bool = False
     items: list[tuple[str, str]] = field(default_factory=list)  # (title_id, achievement_id)
 
 
@@ -98,6 +102,7 @@ class Publisher:
                         xuid=xuid,
                         text=format_single(gamertag, item, title_name),
                         photo_url=item.icon_url,
+                        photo_has_spoiler=item.is_secret,
                         items=[(item.title_id, item.achievement_id)],
                     )
                 )
@@ -135,7 +140,11 @@ class Publisher:
         if job.photo_url:
             try:
                 message = await self._bot.send_photo(
-                    job.chat_id, photo=job.photo_url, caption=job.text
+                    job.chat_id,
+                    photo=job.photo_url,
+                    caption=job.text,
+                    parse_mode=ParseMode.HTML,
+                    has_spoiler=job.photo_has_spoiler,
                 )
                 return message.message_id
             except (TelegramForbiddenError, TelegramRetryAfter):
@@ -143,5 +152,5 @@ class Publisher:
             except Exception:
                 # The achievement matters more than the picture (SPEC 7.1).
                 log.info("icon for chat %s did not go through, sending text", job.chat_id)
-        message = await self._bot.send_message(job.chat_id, job.text)
+        message = await self._bot.send_message(job.chat_id, job.text, parse_mode=ParseMode.HTML)
         return message.message_id

@@ -222,6 +222,7 @@ def _to_row(item: ParsedAchievement) -> AchievementRow:
         rarity_percent=item.rarity_percent,
         platform=item.platform,
         title_name=item.title_name,
+        is_secret=item.is_secret,
     )
 
 

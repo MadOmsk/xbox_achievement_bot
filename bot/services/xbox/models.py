@@ -47,6 +47,11 @@ class ParsedAchievement:
     gamerscore: int
     rarity_percent: float | None  # NULL for Xbox 360 — unknown, not "common"
     platform: Platform
+    # Xbox's own isSecret. name/description are the real, spoiler-containing
+    # text either way — Microsoft does not redact them for a still-locked
+    # secret achievement, found live — hiding them under a Telegram spoiler
+    # is entirely this bot's own doing (SPEC 5.5, 7.1).
+    is_secret: bool = False
 
 
 class _Rarity(BaseModel):
@@ -93,6 +98,7 @@ class ModernAchievement(BaseModel):
     title_associations: list[_TitleAssociation] = Field(
         default_factory=list, alias="titleAssociations"
     )
+    is_secret: bool = Field(default=False, alias="isSecret")
 
     @property
     def is_achieved(self) -> bool:
@@ -119,6 +125,7 @@ class ModernAchievement(BaseModel):
             gamerscore=self._gamerscore(),
             rarity_percent=self.rarity.current_percentage if self.rarity else None,
             platform="modern",
+            is_secret=self.is_secret,
         )
 
     def _icon_url(self) -> str | None:

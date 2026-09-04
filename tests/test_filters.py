@@ -14,7 +14,10 @@ from bot.services.achievements import (
 
 
 def achievement(
-    rarity: float | None = 50.0, platform: str = "modern", gamerscore: int = 20
+    rarity: float | None = 50.0,
+    platform: str = "modern",
+    gamerscore: int = 20,
+    is_secret: bool = False,
 ) -> AchievementRow:
     return AchievementRow(
         title_id="1",
@@ -27,6 +30,7 @@ def achievement(
         rarity_percent=rarity,
         platform=platform,
         title_name="Halo Infinite",
+        is_secret=is_secret,
     )
 
 
@@ -120,6 +124,37 @@ def test_digest_counts_and_trims() -> None:
     text = format_digest("Igor", "Halo Infinite", items)
     assert "5 ачивок за сессию (+100 G)" in text
     assert "… и ещё 2" in text
+
+
+def test_secret_achievement_name_and_description_are_spoilered() -> None:
+    """Xbox's own isSecret does not redact name/description (found live) —
+    hiding them is the bot's own doing, via a Telegram spoiler (SPEC 5.5, 7.1)."""
+    text = format_single("Igor", achievement(is_secret=True), "Halo Infinite")
+    assert '<span class="tg-spoiler">Ashes to Ashes</span>' in text
+    assert '<span class="tg-spoiler">Kill 100 enemies</span>' in text
+
+
+def test_non_secret_achievement_has_no_spoiler_markup() -> None:
+    text = format_single("Igor", achievement(is_secret=False), "Halo Infinite")
+    assert "tg-spoiler" not in text
+
+
+def test_secret_achievement_name_is_spoilered_in_a_digest_line_too() -> None:
+    items = [achievement(is_secret=True), achievement(is_secret=False)]
+    text = format_digest("Igor", "Halo Infinite", items)
+    assert '<span class="tg-spoiler">Ashes to Ashes</span>' in text
+    assert "· Ashes to Ashes ·" in text  # the non-secret one, unwrapped
+
+
+def test_gamertag_and_achievement_text_are_html_escaped() -> None:
+    """format_single/format_digest go out as HTML now (for the spoiler
+    markup) — untrusted text needs escaping or a stray "<"/"&" breaks
+    Telegram's parser, same reasoning as the daily summary's table."""
+    weird = achievement()
+    weird.name = "A&B<C>"
+    text = format_single("We>ird<Name", weird, "Hal&o")
+    assert "<C>" not in text
+    assert "&amp;" in text and "&lt;" in text
 
 
 def test_platform_note_keys_on_platform_not_missing_rarity() -> None:
