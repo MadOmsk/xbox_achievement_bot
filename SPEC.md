@@ -1653,20 +1653,106 @@ display_name, linked_at)`, не трогает `users.xuid`: один челов
 меняются; будущий Steam-вызов должен будет резолвить свой `tg_id` иначе
 (через `platform_links`), это уже другой код пути, не сегодняшний.
 
+**M-Steam-2a.5 (сделано). `ParsedAchievement`/`Platform` переехали в
+`bot/services/models.py`.** Раньше жили внутри `services/xbox/models.py` —
+формально «модуль Xbox», хотя сам тип уже был платформонезависимым по
+форме. Задача Steam-парсера (2b) — производить точно такой же тип, не
+трогая `bot.db.repo` напрямую (1.5: клиент платформы не знает про базу и
+Telegram, это дело поллера) — значит ему нужен нейтральный, не
+Xbox-специфичный источник этого типа. `services/xbox/models.py`
+переэкспортирует оба имени через `__all__`, так что оба существующих
+импорта (`poller/fetcher.py`, `services/xbox/client.py`) не тронуты и
+менять их не пришлось. `Platform` расширен на `'steam'` этим же
+переездом.
+
 **M-Steam-2b (не начато). Клиент и парсинг ачивок Steam.**
-`services/steam/client.py` — три новых вызова: `GetPlayerAchievements`
-(`l=russian`, отдаёт готовые локализованные `name`/`description`,
-`achieved`, `unlocktime` — контракт проще, чем у Xbox, отдельного вызова на
-локализацию не нужно), `GetSchemaForGame` (иконки `icon`/`icongray` и
-`hidden` — steam-аналог `isSecret`, ложится прямо на готовый механизм
-спойлеров, 7.1; кэшировать по `appid` навсегда, как `hltb_cache`, — схема
-игры не меняется от опроса к опросу и не зависит от того, чей это
-запрос), `GetGlobalAchievementPercentagesForApp` (редкость, без ключа
-вообще, тоже кэшируемо, но должна периодически обновляться — в отличие от
-схемы, реальный процент меняется со временем). Три ответа соединяются по
-`apiname`/`name` (один и тот же идентификатор, разное имя поля).
-Проверено вживую (реальный привязанный аккаунт, read-only): все три формы
-подтверждены на «Left 4 Dead 2» — 101 ачивка, поля ровно те, что нужны.
+
+Два файла, не один — тем же расслоением, что уже есть в проекте между
+«тонкий клиент API» (`services/xbox/client.py`, `services/steam/client.py`
+— ничего не знает про базу) и «служба с кэшем поверх клиента»
+(`services/hltb.py` — берёт `repo` напрямую, кэширует в своей таблице):
+
+- **`services/steam/client.py` — три новых, чисто API-обёртки, без `repo`.**
+  Дописываются к уже существующим `resolve_steam_id`/`get_profile`
+  (M-Steam-1), тем же стилем (`_get()`, `SteamApiError`).
+
+  - `get_player_achievements(api_key, steam_id, appid) -> list[RawAchievement]`
+    — `ISteamUserStats/GetPlayerAchievements/v1/` с `l=russian`. Отдаёт уже
+    локализованные `name`/`description` прямо в этом вызове — в отличие от
+    Xbox, второй вызов на локализацию не нужен. Поля на запись:
+    `apiname`, `achieved` (0/1), `unlocktime` (unix-время, `0` у части
+    старых ачивок вместо реальной даты — тот же класс проблемы, что у
+    Xbox-заглушек `0001-01-01`/`1753-01-01`, 4: `0` тоже читаем как
+    «дата неизвестна», не как 1970 год), `name`, `description`.
+    **`success: false` в теле — ожидаемый ответ**, не HTTP-ошибка: приходит
+    и для приватного профиля (мог закрыть статистику уже после привязки —
+    первичная проверка в `/connect_steam` не гарантирует навсегда), и для
+    appid без статистики ачивок вообще. Обрабатывается как «пропускаем
+    эту игру», не падает.
+  - `get_schema(api_key, appid) -> list[RawSchemaAchievement]` —
+    `ISteamUserStats/GetSchemaForGame/v2/` с `l=russian`. Не про
+    конкретного человека — про игру целиком, значит кэшируется
+    **навсегда**, как `hltb_cache`: схема ачивок игры не меняется от
+    опроса к опросу и не зависит от того, чей это запрос. Поля на запись:
+    `name` (тот же идентификатор, что `apiname` выше — Steam называет его
+    по-разному в двух ручках), `icon` (иконка разблокированной — берём
+    её, не `icongray`, публикуем только уже выбитые), `hidden` (0/1) —
+    steam-аналог `isSecret`, ложится прямо на готовый механизм спойлеров
+    (7.1) без изменений там.
+  - `get_global_percentages(appid) -> dict[str, float]` (apiname → percent)
+    — `ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/`, **без
+    ключа вообще**. Тоже про игру целиком, но, в отличие от схемы, реальный
+    процент меняется со временем — кэшируется с истечением (см. ниже), не
+    навсегда.
+
+  Проверено вживую (реальный привязанный аккаунт, read-only, appid 550 —
+  Left 4 Dead 2): все три формы подтверждены, 101 ачивка, поля ровно те,
+  что нужны.
+
+- **`services/steam/achievements.py` — служба поверх клиента, с кэшем.**
+  `fetch_unlocked(repo, api_key, tg_id, steam_id, appid) -> list[ParsedAchievement]`:
+  дёргает все три вызова выше (схему и редкость — через кэш, ниже), сшивает
+  по `apiname`/`name`, отдаёт **только `achieved == 1`** (тот же принцип,
+  что и Xbox: `progressState == 'Achieved'`, раздел 5.3 — недостигнутые не
+  идут в `seen_achievements` вообще, чтобы не спрятать их от публикации
+  навсегда при будущем достижении). `unlocktime == 0` → `unlocked_at =
+  None`, той же функцией конвертации, что уже парсит Xbox-даты
+  (`parse_timestamp` переезжает в `bot/services/models.py` рядом с
+  `ParsedAchievement`, либо остаётся в `xbox/models.py` и переиспользуется
+  — решить при реализации, поведение от этого не меняется).
+
+  **Новые таблицы кэша**, тем же паттерном, что `hltb_cache`:
+
+  ```sql
+  CREATE TABLE steam_schema_cache (
+      appid           TEXT PRIMARY KEY,
+      game_name       TEXT,
+      achievements    TEXT NOT NULL,   -- JSON: [{apiname, name, description, icon, hidden}]
+      cached_at       TEXT NOT NULL
+  );
+
+  CREATE TABLE steam_rarity_cache (
+      appid           TEXT PRIMARY KEY,
+      percentages     TEXT NOT NULL,   -- JSON: {apiname: percent}
+      cached_at       TEXT NOT NULL
+  );
+  ```
+
+  Одна строка на игру, не на ачивку — целиком JSON-блобом, тем же приёмом,
+  что `muted_title_ids`/`hltb_cache.platforms`: десятки ачивок на игру,
+  отдельная таблица ради построчного хранения не окупается. `steam_schema_
+  cache` живёт вечно (как `hltb_cache`, ничем не вытесняется). `steam_
+  rarity_cache` — с истечением: перезапрашивать, если `cached_at` старше
+  N дней (число решить при реализации, ориентир — раз в неделю: проценты
+  двигаются медленно, а лишний вызов без ключевого лимита дёшев, но
+  незачем дёргать на каждый опрос).
+
+  **Что не входит в 2b**: сама запись в `seen_achievements`
+  (`insert_new_achievements` уже готов, 2a, но вызывать его — дело поллера,
+  3c) и обвязка вокруг presence/дебаунса. 2b — только «по appid и SteamID
+  получить список выбитых ачивок с нужными полями», чисто функция без
+  побочных эффектов кроме чтения кэша, тестируемая моками HTTP-ответов,
+  как уже тестируется `services/hltb.py`.
 
 **M-Steam-2c (не начато). Presence и поллер.** `GetPlayerSummaries` уже
 используется в M-Steam-1 для профиля — та же ручка отдаёт `personastate`

@@ -14,13 +14,22 @@ must never cost us the achievement itself.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Platform = Literal["modern", "x360"]
+from bot.services.models import ParsedAchievement, Platform
+
+__all__ = [
+    "ModernAchievement",
+    "ParsedAchievement",
+    "Platform",
+    "X360Achievement",
+    "continuation_token",
+    "parse_achievements",
+    "parse_timestamp",
+]
 
 # "2025-08-30T09:17:58.7770000Z" — seven fractional digits, which
 # datetime.fromisoformat refuses. Cut them down to six.
@@ -31,27 +40,6 @@ _FRACTION = re.compile(r"\.(\d{1,6})\d*")
 # not exist before 2005, so anything older than that is a placeholder, not a
 # date — statistics must not count it as an unlock in the year 1753.
 _EARLIEST_REAL_UNLOCK = datetime(2005, 1, 1, tzinfo=UTC)
-
-
-@dataclass(slots=True)
-class ParsedAchievement:
-    """One unlocked achievement, in the shape the rest of the bot speaks."""
-
-    achievement_id: str
-    title_id: str
-    title_name: str | None
-    name: str
-    description: str | None
-    icon_url: str | None
-    unlocked_at: datetime | None
-    gamerscore: int
-    rarity_percent: float | None  # NULL for Xbox 360 — unknown, not "common"
-    platform: Platform
-    # Xbox's own isSecret. name/description are the real, spoiler-containing
-    # text either way — Microsoft does not redact them for a still-locked
-    # secret achievement, found live — hiding them under a Telegram spoiler
-    # is entirely this bot's own doing (SPEC 5.5, 7.1).
-    is_secret: bool = False
 
 
 class _Rarity(BaseModel):
