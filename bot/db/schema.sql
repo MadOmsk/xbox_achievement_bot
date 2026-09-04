@@ -128,7 +128,14 @@ CREATE TABLE IF NOT EXISTS seen_achievements (
     PRIMARY KEY (tg_id, platform, title_id, achievement_id)
 );
 CREATE INDEX IF NOT EXISTS idx_seen_unlocked ON seen_achievements(xuid, unlocked_at DESC);
-CREATE INDEX IF NOT EXISTS idx_seen_tg_unlocked ON seen_achievements(tg_id, unlocked_at DESC);
+-- idx_seen_tg_unlocked is NOT created here on purpose: _apply_schema() runs
+-- this whole file via executescript on every startup, before migrations —
+-- on a database that hasn't run 011 yet, `tg_id` doesn't exist on the
+-- on-disk table, and this index would crash startup with "no such column:
+-- tg_id" (hit for real in production, migration 009->011 upgrade). 011's
+-- own rebuild-and-swap already (re)creates it, for both a fresh database
+-- (011 still runs once, unconditionally, same as every migration) and an
+-- upgraded one.
 
 -- What was actually published where. Separate from seen_achievements: a user can be
 -- subscribed in two chats, and a failure in one must not lose the achievement in the other.
