@@ -893,9 +893,17 @@ class Repo:
         return await cursor.fetchone() is not None
 
     async def subscribe(self, chat_id: int, tg_id: int) -> None:
+        # rarity_mode is explicit here, not left to the column's own
+        # DEFAULT 'all' — an admin-configurable starting point
+        # (app_settings['default_rarity_mode'], handlers/admin.py) now
+        # decides it instead of a value baked into the schema. The column
+        # default stays 'all' regardless, as a safety net for any insert
+        # that (today or in the future) doesn't go through this method.
+        default_rarity_mode = await self.get_app_setting("default_rarity_mode", "all")
         await self._conn.execute(
-            "INSERT OR IGNORE INTO subscriptions (chat_id, tg_id, created_at) VALUES (?, ?, ?)",
-            (chat_id, tg_id, utcnow_iso()),
+            "INSERT OR IGNORE INTO subscriptions (chat_id, tg_id, created_at, rarity_mode) "
+            "VALUES (?, ?, ?, ?)",
+            (chat_id, tg_id, utcnow_iso(), default_rarity_mode),
         )
         await self._conn.commit()
 

@@ -24,7 +24,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import Settings
 from bot.db.repo import AdminUserRow, ChatTarget, Repo
-from bot.handlers.keyboards import COMMON_OFFSETS_HOURS, format_offset
+from bot.handlers.keyboards import (
+    COMMON_OFFSETS_HOURS,
+    format_offset,
+    format_rarity,
+    next_rarity_mode,
+)
 from bot.poller.fetcher import Fetcher
 from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 from bot.services.tables import truncate_name
@@ -62,6 +67,15 @@ async def admin_home(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> N
     await _redraw(callback, *await _home(repo, fetcher))
 
 
+@router.callback_query(F.data == "a:defaultrarity")
+async def default_rarity_cycle(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
+    current = await repo.get_app_setting(DEFAULT_RARITY_MODE_KEY, DEFAULT_RARITY_MODE_DEFAULT)
+    assert current is not None
+    mode = next_rarity_mode(current)
+    await repo.set_app_setting(DEFAULT_RARITY_MODE_KEY, mode, callback.from_user.id)
+    await _redraw(callback, *await _home(repo, fetcher))
+
+
 # ------------------------------------------------------ free-text numeric settings
 
 # Row-cap settings (always global — no per-chat meaning) and the per-chat
@@ -76,6 +90,14 @@ RARE_THRESHOLD_MIN = 0.01
 RARE_THRESHOLD_MAX = 100.0
 LIMIT_MIN = 1
 LIMIT_MAX = 50
+
+# What a brand-new subscription starts at (Repo.subscribe) — used to be a
+# flat DEFAULT 'all' baked into the subscriptions table (schema.sql), now an
+# admin-configurable app_settings row instead, same cycling button/helpers
+# the personal and per-chat toggles already use (keyboards.py) rather than
+# the free-text numeric flow above — 'all'/'rare'/'hidden' isn't a number.
+DEFAULT_RARITY_MODE_KEY = "default_rarity_mode"
+DEFAULT_RARITY_MODE_DEFAULT = "all"
 
 _LIMIT_LABELS = {
     "summary_top_limit": "Строк в /summary",
@@ -496,6 +518,10 @@ async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup
     active = sum(1 for u in users if u.token_status == "active" and not u.is_excluded)
     excluded = sum(1 for u in users if u.is_excluded)
     broken = sum(1 for u in users if u.token_status != "active")
+    default_rarity_mode = await repo.get_app_setting(
+        DEFAULT_RARITY_MODE_KEY, DEFAULT_RARITY_MODE_DEFAULT
+    )
+    assert default_rarity_mode is not None  # a default was given above
 
     text = (
         "⚙️ Администрирование\n\n"
@@ -508,6 +534,12 @@ async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Ачивки по умолчанию: {format_rarity(default_rarity_mode)} ▸",
+                    callback_data="a:defaultrarity",
+                )
+            ],
             [InlineKeyboardButton(text="Лимиты таблиц ▸", callback_data="a:limits")],
             [InlineKeyboardButton(text="Пользователи ▸", callback_data="a:users:0")],
             [InlineKeyboardButton(text="Чаты ▸", callback_data="a:chats")],

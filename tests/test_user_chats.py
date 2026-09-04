@@ -112,6 +112,20 @@ async def test_new_subscription_defaults_to_all(repo: Repo) -> None:
     assert chats[0].rarity_mode == "all"
 
 
+async def test_new_subscription_follows_the_admin_default(repo: Repo) -> None:
+    """The starting rarity_mode is admin-configurable now
+    (app_settings['default_rarity_mode'], handlers/admin.py), not a value
+    baked into the schema — new subscriptions must pick it up."""
+    await repo.ensure_user(TG_ID, "igor")
+    await _chat(repo, CHAT_A, "Гейминг-чат")
+    await repo.set_app_setting("default_rarity_mode", "rare")
+
+    await repo.subscribe(CHAT_A, TG_ID)
+
+    chats = await repo.user_chats(TG_ID)
+    assert chats[0].rarity_mode == "rare"
+
+
 async def test_rarity_mode_is_none_while_not_subscribed(repo: Repo) -> None:
     await repo.ensure_user(TG_ID, "igor")
     await _chat(repo, CHAT_A, "Гейминг-чат")
