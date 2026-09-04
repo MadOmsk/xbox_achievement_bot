@@ -10,10 +10,11 @@ import time
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import Settings
-from bot.db.repo import Repo
+from bot.db.repo import Repo, UserChatRow
 from bot.handlers.keyboards import (
     DIGEST_NEVER,
     deep_link_keyboard,
@@ -210,6 +211,162 @@ async def panel_timezone(callback: CallbackQuery) -> None:
             reply_markup=timezone_keyboard(skippable=False),
         )
     await callback.answer()
+
+
+# ------------------------------------------------------------------ my chats
+
+
+@router.callback_query(F.data == "panel:chatlist")
+async def panel_chat_list(callback: CallbackQuery, repo: Repo) -> None:
+    await _redraw_chat_list(callback, repo)
+
+
+async def _redraw_chat_list(callback: CallbackQuery, repo: Repo) -> None:
+    chats = await repo.user_chats(callback.from_user.id)
+    text = "💬 Мои чаты"
+    if not chats:
+        text += "\n\nПока ни в одном чате тебя не видел — ни подписок, ни сообщений."
+    builder = InlineKeyboardBuilder()
+    for chat in chats:
+        mark = "✅" if chat.is_subscribed else "⚪"
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark} {chat.title or chat.chat_id}",
+                callback_data=f"panel:chat:{chat.chat_id}",
+            )
+        )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="panel:refresh"))
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+async def _find_user_chat(repo: Repo, tg_id: int, chat_id: int) -> UserChatRow | None:
+    return next((c for c in await repo.user_chats(tg_id) if c.chat_id == chat_id), None)
+
+
+async def _chat_card(
+    repo: Repo, tg_id: int, chat_id: int
+) -> tuple[str, InlineKeyboardMarkup] | None:
+    chat = await _find_user_chat(repo, tg_id, chat_id)
+    if chat is None:
+        return None
+    title = chat.title or chat.chat_id
+    builder = InlineKeyboardBuilder()
+    if chat.is_subscribed:
+        text = f"💬 {title}\n\nПубликация: ✅ включена"
+        builder.row(
+            InlineKeyboardButton(text="Отписаться", callback_data=f"panel:chatunsub:{chat_id}")
+        )
+    else:
+        text = f"💬 {title}\n\nПубликация: ⏸ выключена"
+        builder.row(
+            InlineKeyboardButton(text="Подписаться", callback_data=f"panel:chatsub:{chat_id}")
+        )
+        builder.row(
+            InlineKeyboardButton(text="Удалить из списка", callback_data=f"panel:chatdel:{chat_id}")
+        )
+    builder.row(InlineKeyboardButton(text="‹ К списку чатов", callback_data="panel:chatlist"))
+    return text, builder.as_markup()
+
+
+async def _redraw_chat_card(callback: CallbackQuery, repo: Repo, chat_id: int) -> None:
+    built = await _chat_card(repo, callback.from_user.id, chat_id)
+    if built is None:
+        await _redraw_chat_list(callback, repo)
+        return
+    text, markup = built
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel:chat:"))
+async def panel_chat_card(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    await _redraw_chat_card(callback, repo, chat_id)
+
+
+@router.callback_query(F.data.startswith("panel:chatsub:"))
+async def panel_chat_subscribe(callback: CallbackQuery, repo: Repo) -> None:
+    """No confirm — resubscribing has no downside, unlike unsubscribing or
+    deleting (SPEC 6.2)."""
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    user = await repo.get_user(callback.from_user.id)
+    if user is None or not user.xuid:
+        await callback.answer("Сначала подключи Xbox: /connect_xbox", show_alert=True)
+        return
+    await repo.subscribe(chat_id, callback.from_user.id)
+    await callback.answer("Подписал")
+    await _redraw_chat_card(callback, repo, chat_id)
+
+
+@router.callback_query(F.data.startswith("panel:chatunsub:"))
+async def panel_chat_unsub_prompt(callback: CallbackQuery, repo: Repo) -> None:
+    """Same weight as the standalone /unsubscribe — a confirm, not an instant
+    action (SPEC 6.3): losing a feed in a chat deserves a second tap."""
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_user_chat(repo, callback.from_user.id, chat_id)
+    if chat is None:
+        await _redraw_chat_list(callback, repo)
+        return
+    title = chat.title or chat.chat_id
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="Да, отписаться", callback_data=f"panel:chatunsuby:{chat_id}")
+    )
+    builder.row(InlineKeyboardButton(text="Отмена", callback_data=f"panel:chat:{chat_id}"))
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(
+                f"Перестать публиковать твои ачивки в «{title}»?", reply_markup=builder.as_markup()
+            )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel:chatunsuby:"))
+async def panel_chat_unsub_confirm(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    await repo.unsubscribe(chat_id, callback.from_user.id)
+    await callback.answer("Отписал")
+    await _redraw_chat_card(callback, repo, chat_id)
+
+
+@router.callback_query(F.data.startswith("panel:chatdel:"))
+async def panel_chat_delete_prompt(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_user_chat(repo, callback.from_user.id, chat_id)
+    if chat is None:
+        await _redraw_chat_list(callback, repo)
+        return
+    title = chat.title or chat.chat_id
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="Да, удалить", callback_data=f"panel:chatdely:{chat_id}"))
+    builder.row(InlineKeyboardButton(text="Отмена", callback_data=f"panel:chat:{chat_id}"))
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(
+                f"Убрать «{title}» из списка? Как будто ты там никогда не был — "
+                "не бан, снова окажешься в списке, если подпишешься или напишешь туда.",
+                reply_markup=builder.as_markup(),
+            )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel:chatdely:"))
+async def panel_chat_delete_confirm(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    await repo.forget_chat_membership(chat_id, callback.from_user.id)
+    await callback.answer("Убрал")
+    await _redraw_chat_list(callback, repo)
 
 
 RECENT_IN_PANEL = 5

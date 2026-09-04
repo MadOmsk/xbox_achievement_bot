@@ -126,6 +126,17 @@ class ChatDailySettings:
 
 
 @dataclass(slots=True)
+class UserChatRow:
+    """One chat a person has ever touched — subscribed at some point, or
+    just seen writing there (SPEC 6.2's "Мои чаты") — with whether they are
+    publishing there right now."""
+
+    chat_id: int
+    title: str | None
+    is_subscribed: bool
+
+
+@dataclass(slots=True)
 class AdminUserRow:
     tg_id: int
     gamertag: str | None
@@ -694,6 +705,43 @@ class Repo:
             "SELECT 1 FROM subscriptions WHERE chat_id = ? AND tg_id = ?", (chat_id, tg_id)
         )
         return await cursor.fetchone() is not None
+
+    async def user_chats(self, tg_id: int) -> list[UserChatRow]:
+        """Every chat this person has ever touched (SPEC 6.2's "Мои чаты") —
+        subscribed at some point, or just seen writing there, same membership
+        `/online` uses (SPEC 6.3). A chat the bot got kicked from is left out:
+        nothing to manage there any more."""
+        cursor = await self._conn.execute(
+            "SELECT c.chat_id, c.title,"
+            "       EXISTS(SELECT 1 FROM subscriptions s"
+            "              WHERE s.chat_id = c.chat_id AND s.tg_id = ?) AS subscribed "
+            "FROM chats c WHERE c.is_active = 1 AND c.chat_id IN ("
+            "  SELECT chat_id FROM subscriptions WHERE tg_id = ?"
+            "  UNION "
+            "  SELECT chat_id FROM chat_seen WHERE tg_id = ?"
+            ") ORDER BY c.title",
+            (tg_id, tg_id, tg_id),
+        )
+        return [
+            UserChatRow(
+                chat_id=row["chat_id"], title=row["title"], is_subscribed=bool(row["subscribed"])
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def forget_chat_membership(self, chat_id: int, tg_id: int) -> None:
+        """ "Delete" a chat from a person's own list (SPEC 6.2) — resets him to
+        as if he had never subscribed or been seen there. Not a ban: writing
+        in the chat again, or subscribing again, brings it right back
+        (`record_chat_seen`/`subscribe`) — there is no third state that
+        blocks that."""
+        await self._conn.execute(
+            "DELETE FROM subscriptions WHERE chat_id = ? AND tg_id = ?", (chat_id, tg_id)
+        )
+        await self._conn.execute(
+            "DELETE FROM chat_seen WHERE chat_id = ? AND tg_id = ?", (chat_id, tg_id)
+        )
+        await self._conn.commit()
 
     async def deactivate_chat(self, chat_id: int) -> None:
         """Telegram answered 403 — the bot was kicked out (SPEC 5.5)."""

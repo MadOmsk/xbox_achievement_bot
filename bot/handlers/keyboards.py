@@ -144,6 +144,7 @@ def panel_keyboard(
                 callback_data="panel:tz",
             )
         ],
+        [InlineKeyboardButton(text="💬 Мои чаты ▸", callback_data="panel:chatlist")],
         [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
         [InlineKeyboardButton(text="🔕 Отключить Xbox", callback_data="panel:disconnect")],
         [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
