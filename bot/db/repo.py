@@ -197,7 +197,6 @@ class TopGame:
     name: str | None
     gamerscore: int | None
     unlocked: int | None
-    total: int | None
 
 
 @dataclass(slots=True)
@@ -611,11 +610,6 @@ class Repo:
         await self._conn.commit()
         return new_rows
 
-    async def last_achievement(self, xuid: str) -> AchievementRow | None:
-        """The most recent unlock. Undated rows never win."""
-        rows = await self.recent_achievements(xuid, limit=1)
-        return rows[0] if rows else None
-
     async def recent_achievements(self, xuid: str, limit: int = 5) -> list[AchievementRow]:
         """The last N unlocks, newest first — for the panel (SPEC 6.2).
         Undated rows never win: an unknown unlock time is not "recent"."""
@@ -1008,24 +1002,6 @@ class Repo:
             for row in await cursor.fetchall()
         ]
 
-    async def top_games(self, xuid: str, limit: int = 5) -> list[TopGame]:
-        cursor = await self._conn.execute(
-            "SELECT t.name, h.current_gamerscore, h.achievements_unlocked, h.achievements_total "
-            "FROM title_history h LEFT JOIN titles t ON t.title_id = h.title_id "
-            "WHERE h.xuid = ? AND h.current_gamerscore > 0 "
-            "ORDER BY h.current_gamerscore DESC LIMIT ?",
-            (xuid, limit),
-        )
-        return [
-            TopGame(
-                name=row["name"],
-                gamerscore=row["current_gamerscore"],
-                unlocked=row["achievements_unlocked"],
-                total=row["achievements_total"],
-            )
-            for row in await cursor.fetchall()
-        ]
-
     async def recent_games(self, xuid: str, since: datetime, limit: int = 15) -> list[TopGame]:
         """Games actually played recently, not the biggest lifetime scores —
         a person's five favourite old games would otherwise crowd out
@@ -1043,7 +1019,7 @@ class Repo:
             (xuid, _iso(since), limit or -1),
         )
         return [
-            TopGame(name=row["name"], gamerscore=row["score"], unlocked=row["unlocked"], total=None)
+            TopGame(name=row["name"], gamerscore=row["score"], unlocked=row["unlocked"])
             for row in await cursor.fetchall()
         ]
 

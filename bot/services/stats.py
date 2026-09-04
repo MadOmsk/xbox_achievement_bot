@@ -17,7 +17,7 @@ by making both counters and the games table use the same rolling window.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from bot.db.repo import Repo
 from bot.util import utcnow
@@ -60,27 +60,3 @@ async def counters_for(repo: Repo, xuid: str, now: datetime | None = None) -> Co
     today, today_score = await repo.achievement_counts(xuid, today_cutoff_utc(now))
     month, month_score = await repo.achievement_counts(xuid, month_cutoff_utc(now))
     return Counters(today, today_score, month, month_score)
-
-
-def offset_minutes_for_zone(name: str | None) -> int:
-    """An IANA name to a fixed UTC offset in minutes, defaulting to 0 for an
-    empty or unknown name.
-
-    Stored as an IANA name, but the whole bot works in fixed offsets, so it is
-    resolved here rather than dragging tzdata through every counter. Used both
-    for the global timezone and a chat's own override (SPEC 5.7) — the caller
-    decides which name to resolve, this just does the resolution.
-    """
-    if not name:
-        return 0
-    try:
-        from zoneinfo import ZoneInfo
-
-        offset = datetime.now(ZoneInfo(name)).utcoffset()
-    except Exception:
-        return 0
-    return int(offset.total_seconds() // 60) if offset else 0
-
-
-def as_utc(moment: datetime) -> datetime:
-    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
