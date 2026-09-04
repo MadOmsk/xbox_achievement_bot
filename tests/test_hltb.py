@@ -98,6 +98,12 @@ def test_pick_fallback_word_skips_a_leading_stopword() -> None:
     assert _pick_fallback_word("The Last of Us") == "Last"
 
 
+def test_pick_fallback_word_skips_multiple_leading_stopwords_in_a_row() -> None:
+    # Not just one skip — every word is checked in turn until a real one
+    # turns up, however many exceptions come first.
+    assert _pick_fallback_word("PC The Witcher 3") == "Witcher"
+
+
 def test_pick_fallback_word_is_none_for_a_single_word_query() -> None:
     # Retrying with the exact same string that already found nothing would
     # just repeat the failed search.
