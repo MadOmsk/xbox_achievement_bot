@@ -186,11 +186,11 @@ def _games_list(games: list[TopGame]) -> str:
     return blockquote(rows)
 
 
-# Marker circles for the platform lines in /stats' header (SPEC 9,
-# M-Steam-2e) — unrelated to _presence_icon below: that one means "in
-# game/online/no data" for /online, this one just tags which platform a
-# line is about. PlayStation isn't linkable yet, kept for when it is.
-_PLATFORM_ICON = {"steam": "⚫", "psn": "🔵"}
+# Marker circles for the platform lines in /stats' header, and for
+# /online's per-name icon too (_presence_icon below, SPEC 9, M-Steam-2e) —
+# same colours, same meaning, both just tag which platform. PlayStation
+# isn't linkable yet, kept for when it is.
+_PLATFORM_ICON = {"modern": "🟢", "steam": "⚫", "psn": "🔵"}
 _PLATFORM_LABEL = {"steam": "Steam", "psn": "PlayStation"}
 
 
@@ -217,13 +217,22 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
     lines = [f"📊 <b>{html_escape(_display_name(target, platform_links))}</b>"]
     if target.xuid:
         lines.append(
-            f"🟢 Xbox: {html_escape(target.gamertag or 'без геймертега')}  ·  "
-            f"gamerscore {thousands(target.gamerscore or 0)}"
+            f"{_PLATFORM_ICON['modern']} Xbox: {html_escape(target.gamertag or 'без геймертега')}"
+            f"  ·  gamerscore {thousands(target.gamerscore or 0)}"
         )
     for link in platform_links:
         icon = _PLATFORM_ICON.get(link.platform, "⚪")
         label = _PLATFORM_LABEL.get(link.platform, link.platform)
-        lines.append(f"{icon} {label}: {html_escape(link.display_name or link.external_id)}")
+        # A lifetime count is fine here, unlike Xbox's own seen_achievements
+        # count above (deliberately never shown as a lifetime total, SPEC
+        # 5.4: title_history is capped, so any count derived from it could
+        # undercount) — a Steam backfill has no such cap, GetOwnedGames
+        # sees the whole library, so this number is trustworthy as-is.
+        count = await repo.platform_achievement_count(target.tg_id, link.platform)
+        lines.append(
+            f"{icon} {label}: {html_escape(link.display_name or link.external_id)}"
+            f"  ·  {plural_achievements(count)}"
+        )
 
     lines += [
         "",
@@ -284,11 +293,9 @@ def _presence_text(row: ChatPresenceRow) -> str:
 
 
 def _presence_icon(row: ChatPresenceRow) -> str:
-    if row.state == "Online" and row.title_id:
-        return "🟢"
-    if row.state == "Online":
-        return "🟡"
-    return "⚪"
+    # Platform colour, not status (SPEC 9, M-Steam-2e) — status is already
+    # in the text next to it (_presence_text); same palette as /stats.
+    return _PLATFORM_ICON.get(row.platform, "⚪")
 
 
 @router.message(Command("online"))

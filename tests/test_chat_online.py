@@ -10,33 +10,50 @@ XUID_B = "xuid-b"
 CHAT_ID = -100500
 
 
-def presence(state: str | None, title_id: str | None = None, title_name: str | None = None):
+def presence(
+    state: str | None,
+    title_id: str | None = None,
+    title_name: str | None = None,
+    platform: str = "modern",
+):
     return ChatPresenceRow(
-        tg_id=1, gamertag="Igor", xuid=XUID_A, state=state, title_id=title_id, title_name=title_name
+        tg_id=1,
+        gamertag="Igor",
+        xuid=XUID_A,
+        state=state,
+        title_id=title_id,
+        title_name=title_name,
+        platform=platform,
     )
 
 
 def test_playing_shows_the_game() -> None:
     row = presence("Online", "123", "Halo Infinite")
     assert _presence_text(row) == "играет — Halo Infinite"
-    assert _presence_icon(row) == "🟢"
 
 
 def test_online_not_playing() -> None:
     row = presence("Online", None)
     assert _presence_text(row) == "в сети, не играет"
-    assert _presence_icon(row) == "🟡"
 
 
 def test_offline() -> None:
     row = presence("Offline")
     assert _presence_text(row) == "не в сети"
-    assert _presence_icon(row) == "⚪"
 
 
 def test_never_polled() -> None:
     row = presence(None)
     assert _presence_text(row) == "нет данных"
+
+
+def test_presence_icon_is_platform_colour_not_status() -> None:
+    """SPEC 9, M-Steam-2e: the circle marks which platform, not whether the
+    person is playing — status is already in the text next to it."""
+    assert _presence_icon(presence("Online", "123", "Halo Infinite", platform="modern")) == "🟢"
+    assert _presence_icon(presence("Offline", platform="modern")) == "🟢"
+    assert _presence_icon(presence("Online", "550", "L4D2", platform="steam")) == "⚫"
+    assert _presence_icon(presence(None, platform="steam")) == "⚫"
 
 
 def test_hub_keyboard_has_exactly_four_buttons_and_carries_the_chat_id() -> None:
@@ -62,6 +79,41 @@ async def test_chat_member_presence_orders_playing_first(repo: Repo) -> None:
     rows = await repo.chat_member_presence(CHAT_ID)
 
     assert [row.gamertag for row in rows] == ["Playing", "Offline"]
+    assert {row.platform for row in rows} == {"modern"}
+
+
+async def test_chat_member_presence_reports_platform_for_steam_only_and_mixed(
+    repo: Repo,
+) -> None:
+    """SPEC 9, M-Steam-2e: platform is exposed so /online can colour the
+    icon — a Steam-only person defaults to 'steam' with no presence data
+    at all, and whichever platform actually updated more recently wins for
+    someone with both connected."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+
+    await repo.ensure_user(1, "steamonly")
+    await repo.link_platform_account(1, "steam", "76561197960287930", "SteamOnly")
+    await repo.subscribe(CHAT_ID, 1)
+
+    await repo.ensure_user(2, "both")
+    await repo.link_xbox_account(2, XUID_B, "Both", 0)
+    await repo.link_platform_account(2, "steam", "76561197981065056", "BothSteam")
+    await repo.subscribe(CHAT_ID, 2)
+    await repo.save_presence_state(XUID_B, "Online", "123", "Halo Infinite", changed=True)
+    await repo.save_steam_presence_state("76561197981065056", 1, "550", "L4D2", changed=True)
+    # Both writes land in the same second at second-resolution timestamps —
+    # backdate the Xbox one so which is "fresher" is unambiguous, the same
+    # as it always would be at real 60s-apart tick granularity.
+    await repo._conn.execute(
+        "UPDATE presence_state SET updated_at = '2020-01-01T00:00:00+00:00' WHERE xuid = ?",
+        (XUID_B,),
+    )
+    await repo._conn.commit()
+
+    rows = {row.tg_id: row for row in await repo.chat_member_presence(CHAT_ID)}
+
+    assert rows[1].platform == "steam"  # no presence data at all, only a Steam link
+    assert rows[2].platform == "steam"  # both connected, Steam updated last
 
 
 async def test_chat_exists(repo: Repo) -> None:

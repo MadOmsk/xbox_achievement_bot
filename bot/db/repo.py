@@ -181,7 +181,9 @@ class ChatPresenceRow:
     vocabulary regardless of which platform they actually came from (SPEC 9,
     M-Steam-2e) — the query picks whichever platform's presence updated more
     recently and translates Steam's own persona_state/gameid into the same
-    shape, so nothing downstream needs to know Steam presence exists at all.
+    shape, so the "playing/online/offline" wording never needs to know
+    Steam presence exists. `platform` is exposed separately, only for the
+    icon colour next to the name — not mixed into `state`.
     """
 
     tg_id: int
@@ -190,6 +192,7 @@ class ChatPresenceRow:
     state: str | None
     title_id: str | None
     title_name: str | None
+    platform: str  # whichever platform state/title_id/title_name came from
 
 
 @dataclass(slots=True)
@@ -1044,6 +1047,20 @@ class Repo:
         row = await cursor.fetchone()
         return (int(row[0]), int(row[1])) if row else (0, 0)
 
+    async def platform_achievement_count(self, tg_id: int, platform: str) -> int:
+        """Lifetime count for one platform (SPEC 9, M-Steam-2e's /stats line
+        next to each connected platform) — deliberately not offered for
+        Xbox (`achievement_counts` never exposes a since=None total either,
+        SPEC 5.4): a lifetime Steam count has no cap to worry about
+        (backfill walks the whole owned-games library via GetOwnedGames),
+        so it doesn't carry the same "could quietly undercount" risk."""
+        cursor = await self._conn.execute(
+            "SELECT COUNT(*) FROM seen_achievements WHERE tg_id = ? AND platform = ?",
+            (tg_id, platform),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
     async def achievement_counts_by_xuid(
         self, since: datetime | None
     ) -> dict[str, tuple[int, int]]:
@@ -1126,10 +1143,14 @@ class Repo:
         Merges Xbox and Steam presence (SPEC 9, M-Steam-2e): whichever
         platform's presence row updated more recently wins, normalized into
         the same `state`/`title_id`/`title_name` shape Xbox always used, so
-        nothing downstream (`_presence_text`/`_presence_icon`, `handlers/
-        chat.py`) needs to know Steam presence exists at all. A person known
-        only through Steam now appears here too — used to require `u.xuid
-        IS NOT NULL`, which silently dropped Steam-only members entirely.
+        the "playing/online/offline" wording (`_presence_text`, `handlers/
+        chat.py`) never needs to know Steam presence exists. `platform` is
+        reported alongside it too, only for the icon colour next to the
+        name (`_presence_icon`) — falls back to whichever platform the
+        person actually has connected when neither has presence data yet.
+        A person known only through Steam now appears here too — used to
+        require `u.xuid IS NOT NULL`, which silently dropped Steam-only
+        members entirely.
         """
         cursor = await self._conn.execute(
             "WITH member AS ("
@@ -1142,7 +1163,7 @@ class Repo:
             "                   AND (xp.updated_at IS NULL OR sp.updated_at > xp.updated_at)"
             "              THEN 1 ELSE 0 END AS steam_is_fresher,"
             "         xp.state AS xbox_state, xp.title_id AS xbox_title_id,"
-            "         xp.title_name AS xbox_title_name,"
+            "         xp.title_name AS xbox_title_name, xp.updated_at AS xbox_updated_at,"
             "         sp.persona_state AS steam_persona_state, sp.gameid AS steam_gameid,"
             "         sp.game_name AS steam_game_name, pl.external_id AS steam_external_id"
             "  FROM member"
@@ -1159,7 +1180,11 @@ class Repo:
             "       CASE WHEN steam_is_fresher THEN steam_gameid ELSE xbox_title_id END"
             "         AS title_id,"
             "       CASE WHEN steam_is_fresher THEN steam_game_name ELSE xbox_title_name END"
-            "         AS title_name "
+            "         AS title_name,"
+            "       CASE WHEN steam_is_fresher THEN 'steam'"
+            "            WHEN xbox_updated_at IS NOT NULL THEN 'modern'"
+            "            WHEN xuid IS NOT NULL THEN 'modern'"
+            "            ELSE 'steam' END AS platform "
             "FROM presence "
             "ORDER BY "
             "  CASE WHEN state = 'Online' AND title_id IS NOT NULL THEN 0 "
@@ -1176,6 +1201,7 @@ class Repo:
                 state=row["state"],
                 title_id=row["title_id"],
                 title_name=row["title_name"],
+                platform=row["platform"],
             )
             for row in await cursor.fetchall()
         ]

@@ -61,6 +61,53 @@ async def test_header_gamerscore_is_the_profile_value_not_a_sum(repo: Repo) -> N
     assert "10 G" not in xbox_line
 
 
+async def test_steam_line_shows_its_own_lifetime_achievement_count(repo: Repo) -> None:
+    """SPEC 9, M-Steam-2e: unlike Xbox's line (profile gamerscore, never a
+    seen_achievements sum), Steam's line shows a lifetime count from
+    seen_achievements directly — no cap risk there (backfill sees the whole
+    owned-games library), so it's trustworthy as a total."""
+    await repo.ensure_user(1, "someone")
+    await repo.link_platform_account(1, "steam", "76561197960287930", "SteamPerson")
+    await repo.insert_new_achievements_steam(
+        1,
+        "76561197960287930",
+        [
+            AchievementRow(
+                title_id="550",
+                achievement_id="a1",
+                name="A",
+                description=None,
+                icon_url=None,
+                unlocked_at="2026-01-01T00:00:00+00:00",
+                gamerscore=0,
+                rarity_percent=50.0,
+                platform="steam",
+            ),
+            AchievementRow(
+                title_id="550",
+                achievement_id="a2",
+                name="B",
+                description=None,
+                icon_url=None,
+                unlocked_at="2026-01-02T00:00:00+00:00",
+                gamerscore=0,
+                rarity_percent=20.0,
+                platform="steam",
+            ),
+        ],
+        is_backfill=True,
+    )
+
+    user = await repo.get_user(1)
+    assert user is not None
+    text = await _build_stats_text(repo, user)
+
+    assert text is not None
+    steam_line = next(line for line in text.split("\n") if line.startswith("⚫"))
+    assert "SteamPerson" in steam_line
+    assert "2 ачивки" in steam_line
+
+
 async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:
     """stats_games_limit (default 15) caps how many games show — no separate
     "показать все игры" button any more, the list is a collapsible quote
