@@ -1140,17 +1140,29 @@ class Repo:
         first, then online, then the rest, so the people actually worth
         pinging float to the top.
 
-        Merges Xbox and Steam presence (SPEC 9, M-Steam-2e): whichever
-        platform's presence row updated more recently wins, normalized into
-        the same `state`/`title_id`/`title_name` shape Xbox always used, so
-        the "playing/online/offline" wording (`_presence_text`, `handlers/
-        chat.py`) never needs to know Steam presence exists. `platform` is
-        reported alongside it too, only for the icon colour next to the
-        name (`_presence_icon`) — falls back to whichever platform the
-        person actually has connected when neither has presence data yet.
-        A person known only through Steam now appears here too — used to
-        require `u.xuid IS NOT NULL`, which silently dropped Steam-only
-        members entirely.
+        Merges Xbox and Steam presence (SPEC 9, M-Steam-2e) by activity
+        level first, freshness only as a tiebreaker — **not** "whichever
+        updated more recently wins" outright: found live, that version
+        showed someone as idle-on-Xbox instead of actively-playing-on-
+        Steam simply because Xbox happened to get polled a moment later,
+        which every poll does regardless of whether anything changed
+        (`save_presence_state`/`save_steam_presence_state` bump
+        `updated_at` on every tick). "Playing" always beats "online",
+        which always beats "offline/no data", on whichever platform it's
+        true on; `updated_at` only decides between two platforms tied at
+        the *same* level (both playing, or both merely online) — matching
+        the "играет > онлайн > офлайн" rule this was designed to have from
+        the start.
+
+        Normalized into the same `state`/`title_id`/`title_name` shape
+        Xbox always used, so the "playing/online/offline" wording
+        (`_presence_text`, `handlers/chat.py`) never needs to know Steam
+        presence exists. `platform` is reported alongside it too, only for
+        the icon colour next to the name (`_presence_icon`) — falls back
+        to whichever platform the person actually has connected when
+        neither has any presence data at all. A person known only through
+        Steam now appears here too — used to require `u.xuid IS NOT NULL`,
+        which silently dropped Steam-only members entirely.
         """
         cursor = await self._conn.execute(
             "WITH member AS ("
@@ -1159,33 +1171,47 @@ class Repo:
             "  SELECT tg_id FROM chat_seen WHERE chat_id = ?"
             "), presence AS ("
             "  SELECT u.tg_id, u.gamertag, u.xuid,"
-            "         CASE WHEN sp.updated_at IS NOT NULL"
-            "                   AND (xp.updated_at IS NULL OR sp.updated_at > xp.updated_at)"
-            "              THEN 1 ELSE 0 END AS steam_is_fresher,"
             "         xp.state AS xbox_state, xp.title_id AS xbox_title_id,"
             "         xp.title_name AS xbox_title_name, xp.updated_at AS xbox_updated_at,"
             "         sp.persona_state AS steam_persona_state, sp.gameid AS steam_gameid,"
-            "         sp.game_name AS steam_game_name, pl.external_id AS steam_external_id"
+            "         sp.game_name AS steam_game_name, sp.updated_at AS steam_updated_at,"
+            "         pl.external_id AS steam_external_id,"
+            "         CASE WHEN xp.state = 'Online' AND xp.title_id IS NOT NULL THEN 2"
+            "              WHEN xp.state = 'Online' THEN 1"
+            "              ELSE 0 END AS xbox_level,"
+            "         CASE WHEN sp.persona_state IS NOT NULL AND sp.persona_state != 0"
+            "                   AND sp.gameid IS NOT NULL THEN 2"
+            "              WHEN sp.persona_state IS NOT NULL AND sp.persona_state != 0 THEN 1"
+            "              ELSE 0 END AS steam_level"
             "  FROM member"
             "  JOIN users u ON u.tg_id = member.tg_id"
             "  LEFT JOIN presence_state xp ON xp.xuid = u.xuid"
             "  LEFT JOIN platform_links pl ON pl.tg_id = u.tg_id AND pl.platform = 'steam'"
             "  LEFT JOIN steam_presence_state sp ON sp.steam_id = pl.external_id"
             "  WHERE (u.xuid IS NOT NULL OR pl.external_id IS NOT NULL) AND u.is_excluded = 0"
+            "), decided AS ("
+            "  SELECT *, CASE"
+            "    WHEN steam_level > xbox_level THEN 1"
+            "    WHEN steam_level < xbox_level THEN 0"
+            "    WHEN steam_level > 0 THEN"  # tied, both actually active — freshness breaks it
+            "      CASE WHEN steam_updated_at IS NOT NULL"
+            "                AND (xbox_updated_at IS NULL OR steam_updated_at > xbox_updated_at)"
+            "           THEN 1 ELSE 0 END"
+            "    ELSE"  # tied at zero — nobody's doing anything, fall back to what's connected
+            "      CASE WHEN xuid IS NULL THEN 1 ELSE 0 END"
+            "    END AS steam_wins"
+            "  FROM presence"
             ") "
             "SELECT tg_id, gamertag, xuid,"
-            "       CASE WHEN steam_is_fresher THEN"
+            "       CASE WHEN steam_wins THEN"
             "              CASE WHEN steam_persona_state != 0 THEN 'Online' ELSE 'Offline' END"
             "            ELSE xbox_state END AS state,"
-            "       CASE WHEN steam_is_fresher THEN steam_gameid ELSE xbox_title_id END"
+            "       CASE WHEN steam_wins THEN steam_gameid ELSE xbox_title_id END"
             "         AS title_id,"
-            "       CASE WHEN steam_is_fresher THEN steam_game_name ELSE xbox_title_name END"
+            "       CASE WHEN steam_wins THEN steam_game_name ELSE xbox_title_name END"
             "         AS title_name,"
-            "       CASE WHEN steam_is_fresher THEN 'steam'"
-            "            WHEN xbox_updated_at IS NOT NULL THEN 'modern'"
-            "            WHEN xuid IS NOT NULL THEN 'modern'"
-            "            ELSE 'steam' END AS platform "
-            "FROM presence "
+            "       CASE WHEN steam_wins THEN 'steam' ELSE 'modern' END AS platform "
+            "FROM decided "
             "ORDER BY "
             "  CASE WHEN state = 'Online' AND title_id IS NOT NULL THEN 0 "
             "       WHEN state = 'Online' THEN 1 "

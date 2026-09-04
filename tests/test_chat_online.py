@@ -113,7 +113,37 @@ async def test_chat_member_presence_reports_platform_for_steam_only_and_mixed(
     rows = {row.tg_id: row for row in await repo.chat_member_presence(CHAT_ID)}
 
     assert rows[1].platform == "steam"  # no presence data at all, only a Steam link
-    assert rows[2].platform == "steam"  # both connected, Steam updated last
+    assert rows[2].platform == "steam"  # both playing (tied activity level), Steam fresher
+
+
+async def test_playing_on_one_platform_beats_merely_online_on_the_other(repo: Repo) -> None:
+    """Found live: Mad Omsk was playing on Steam and merely online (not
+    playing) on Xbox, but /online showed Xbox — because the first version
+    of this merge compared `updated_at` alone, and Xbox happened to get
+    polled a moment later (every poll bumps updated_at, changed or not).
+    'Playing' must always outrank 'online' regardless of which platform
+    updated more recently — freshness only breaks a tie at the *same*
+    activity level (SPEC 9, M-Steam-2e, "играет > онлайн > офлайн")."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    await repo.ensure_user(1, "madomsk")
+    await repo.link_xbox_account(1, XUID_A, "MadOmsk", 0)
+    await repo.link_platform_account(1, "steam", "76561197981065056", "MadOmskSteam")
+    await repo.subscribe(CHAT_ID, 1)
+
+    # Steam: playing. Xbox: online, not playing — but polled after Steam,
+    # so its updated_at is the more recent one.
+    await repo.save_steam_presence_state(
+        "76561197981065056", 1, "550", "Left 4 Dead 2", changed=True
+    )
+    await repo.save_presence_state(XUID_A, "Online", None, None, changed=True)
+
+    rows = await repo.chat_member_presence(CHAT_ID)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.platform == "steam"
+    assert row.title_id == "550"
+    assert row.title_name == "Left 4 Dead 2"
 
 
 async def test_chat_exists(repo: Repo) -> None:
