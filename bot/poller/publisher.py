@@ -100,7 +100,7 @@ class Publisher:
                     PublishJob(
                         chat_id=chat.chat_id,
                         xuid=xuid,
-                        text=format_single(gamertag, item, title_name),
+                        text=format_single(gamertag, item),
                         photo_url=item.icon_url,
                         photo_has_spoiler=item.is_secret,
                         items=[(item.title_id, item.achievement_id)],

@@ -122,20 +122,34 @@ def _spoiler(text: str, *, secret: bool) -> str:
     return f'<span class="tg-spoiler">{text}</span>' if secret else text
 
 
-def format_single(gamertag: str, achievement: AchievementRow, title_name: str | None) -> str:
-    title = title_name or achievement.title_name or "неизвестная игра"
-    parts = [html_escape(title), platform_tag(achievement.platform)]
+def format_single(gamertag: str, achievement: AchievementRow) -> str:
+    """SPEC 9, M-Steam-2e — reworked so the platform is the headline, not an
+    afterthought: which game this came from used to lead the second line,
+    dropped in favor of the achievement's own name there, now that a
+    message can come from either of two platforms and that's the more
+    useful thing to know at a glance (the icon and the description below
+    still say plenty about the specific game/achievement).
+    """
+    tag = platform_tag(achievement.platform)
+    # "трофей" is PSN's own word for these, not built yet — this is the one
+    # spot ready for it (SPEC 9, future): everything else about the message
+    # (gamerscore vs. a trophy colour vs. nothing) already branches on
+    # platform the same way.
+    verb = "получает трофей" if achievement.platform == "psn" else "получает достижение"
+    header = f"🏆 {html_escape(gamertag)} {verb} {tag}"
+
+    name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
+    parts = [f"«{name}»"]
     # Steam has no gamerscore at all — services/steam/achievements.py always
     # parses it as 0, and "0 G" reads as a real (if trivial) score rather
-    # than "not applicable here" (SPEC 9, M-Steam-2e).
-    if achievement.platform != "steam":
+    # than "not applicable here". PSN will show a trophy colour in this
+    # same slot once it exists, neither score nor "nothing" (SPEC 9, future).
+    if achievement.platform not in ("steam", "psn"):
         parts.append(f"{achievement.gamerscore} G")
     if achievement.platform != "x360" and achievement.rarity_percent is not None:
         badge = rarity_badge(achievement.rarity_percent)
         parts.append(f"редкость {achievement.rarity_percent:g}%{' ' + badge if badge else ''}")
-
-    name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
-    text = f"🏆 {html_escape(gamertag)} выбил «{name}»\n{' · '.join(parts)}"
+    text = f"{header}\n{' · '.join(parts)}"
     if achievement.description:
         description = _spoiler(html_escape(achievement.description), secret=achievement.is_secret)
         text += f"\n\n{description}"
