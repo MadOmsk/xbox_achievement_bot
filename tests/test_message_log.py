@@ -70,3 +70,20 @@ async def test_bot_messages_round_trip_and_forget(repo: Repo) -> None:
 
     await repo.forget_bot_messages(CHAT_ID, [1])
     assert await repo.bot_messages_since(CHAT_ID, now - timedelta(minutes=1)) == [2]
+
+
+async def test_last_bot_message_is_the_highest_message_id(repo: Repo) -> None:
+    """For /delete_last (chat.py) — message_id, not sent_at: Telegram hands
+    out ids sequentially per chat, and a poll tick can log several messages
+    within the same second, where sent_at alone couldn't tell them apart."""
+    await repo.upsert_chat(CHAT_ID, "Test chat", 1)
+    await repo.log_bot_message(CHAT_ID, 5)
+    await repo.log_bot_message(CHAT_ID, 9)
+    await repo.log_bot_message(CHAT_ID, 7)
+
+    assert await repo.last_bot_message(CHAT_ID) == 9
+
+
+async def test_last_bot_message_is_none_for_an_untouched_chat(repo: Repo) -> None:
+    await repo.upsert_chat(CHAT_ID, "Test chat", 1)
+    assert await repo.last_bot_message(CHAT_ID) is None

@@ -31,6 +31,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.repo import ChatPresenceRow, PlatformLink, RecentAchievement, Repo, TopGame, User
+from bot.handlers.admin import IsAdmin
 from bot.poller.daily import build_summary, full_leaderboard
 from bot.services.achievements import plural_achievements, rarity_badge
 from bot.services.stats import counters_for, local_now
@@ -625,3 +626,32 @@ async def _refresh_hub(message: Message, repo: Repo, bot: Bot) -> None:
             await hub_text(repo, message.chat.id),
             reply_markup=hub_keyboard(me.username or "", message.chat.id),
         )
+
+
+@router.message(Command("delete_last"), F.chat.type.in_(GROUP_TYPES), IsAdmin())
+async def delete_last(message: Message, repo: Repo, bot: Bot) -> None:
+    """Quick undo, right in the chat — the admin panel's own "стереть
+    сообщения бота" (admin.py's a:cwipe) is a 24-hour bulk wipe reached
+    through a private-chat menu, overkill for "oops, wrong one just now".
+    IsAdmin (admin.py) is the bot's own admin_tg_ids, same as everywhere
+    else "admin" means in this project — not generic Telegram chat admins.
+    """
+    message_id = await repo.last_bot_message(message.chat.id)
+    if message_id is None:
+        await message.answer("Не нашёл сообщений бота в этом чате.")
+        return
+
+    try:
+        await bot.delete_message(message.chat.id, message_id)
+    except Exception:
+        # Too old (Telegram caps deletes at 48h) or already gone either way
+        # — same reasoning as the bulk wipe, nothing left worth keeping the
+        # log row for.
+        log.info("delete_last failed for chat %s message %s", message.chat.id, message_id)
+        await repo.forget_bot_messages(message.chat.id, [message_id])
+        await message.answer("Не смог удалить — возможно, сообщение слишком старое.")
+        return
+
+    await repo.forget_bot_messages(message.chat.id, [message_id])
+    with contextlib.suppress(Exception):
+        await message.delete()  # tidy up the /delete_last command itself too

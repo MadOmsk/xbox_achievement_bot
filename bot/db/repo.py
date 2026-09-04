@@ -1427,6 +1427,20 @@ class Repo:
         )
         return [row[0] for row in await cursor.fetchall()]
 
+    async def last_bot_message(self, chat_id: int) -> int | None:
+        """For /delete_last (SPEC 6.4's follow-up) — Telegram message_ids are
+        assigned sequentially per chat, so the highest one logged here *is*
+        the most recent, no timestamp-tie ambiguity the way sent_at alone
+        would have (same-second messages are common right after a poll tick
+        publishes more than one)."""
+        cursor = await self._conn.execute(
+            "SELECT message_id FROM bot_messages WHERE chat_id = ? "
+            "ORDER BY message_id DESC LIMIT 1",
+            (chat_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
     async def forget_bot_messages(self, chat_id: int, message_ids: Sequence[int]) -> None:
         """Drops the log rows after an actual delete attempt — called
         regardless of whether Telegram could delete every one of them (some
