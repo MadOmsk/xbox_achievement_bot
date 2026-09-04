@@ -56,6 +56,13 @@ def setup_logging(level: str) -> None:
         # that hides real tracebacks.
         stream=sys.stdout,
     )
+    # httpx logs "HTTP Request: GET <full url> ..." at INFO for every call —
+    # harmless for Xbox (auth goes in a header), but Steam's API puts its key
+    # in the URL's own query string (SPEC 1.5's "never in logs" — no
+    # exception for something a library does on our behalf). Found live in
+    # production: the key had been sitting in plain text in journalctl since
+    # M-Steam-1. WARNING still surfaces httpx's own connection/TLS errors.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 async def run(settings: Settings) -> None:
