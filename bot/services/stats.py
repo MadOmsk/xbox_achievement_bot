@@ -56,7 +56,9 @@ def month_cutoff_utc(now: datetime | None = None) -> datetime:
     return (now or utcnow()) - timedelta(days=30)
 
 
-async def counters_for(repo: Repo, xuid: str, now: datetime | None = None) -> Counters:
-    today, today_score = await repo.achievement_counts(xuid, today_cutoff_utc(now))
-    month, month_score = await repo.achievement_counts(xuid, month_cutoff_utc(now))
+async def counters_for(repo: Repo, tg_id: int, now: datetime | None = None) -> Counters:
+    """Summed across every platform the person has connected (SPEC 9,
+    M-Steam-2e) — keyed by tg_id, not any one platform's own external id."""
+    today, today_score = await repo.achievement_counts_for_person(tg_id, today_cutoff_utc(now))
+    month, month_score = await repo.achievement_counts_for_person(tg_id, month_cutoff_utc(now))
     return Counters(today, today_score, month, month_score)

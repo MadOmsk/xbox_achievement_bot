@@ -30,7 +30,7 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, TopGame, User
+from bot.db.repo import ChatPresenceRow, PlatformLink, RecentAchievement, Repo, TopGame, User
 from bot.poller.daily import build_summary, full_leaderboard
 from bot.services.achievements import plural_achievements, rarity_badge
 from bot.services.stats import counters_for, local_now
@@ -186,16 +186,46 @@ def _games_list(games: list[TopGame]) -> str:
     return blockquote(rows)
 
 
+# Marker circles for the platform lines in /stats' header (SPEC 9,
+# M-Steam-2e) — unrelated to _presence_icon below: that one means "in
+# game/online/no data" for /online, this one just tags which platform a
+# line is about. PlayStation isn't linkable yet, kept for when it is.
+_PLATFORM_ICON = {"steam": "⚫", "psn": "🔵"}
+_PLATFORM_LABEL = {"steam": "Steam", "psn": "PlayStation"}
+
+
+def _display_name(target: User, links: list[PlatformLink]) -> str:
+    if target.gamertag:
+        return target.gamertag
+    if links:
+        return links[0].display_name or links[0].external_id
+    return "без геймертега"
+
+
 async def _build_stats_text(repo: Repo, target: User) -> str | None:
     """Shared by /stats and /who's buttons (SPEC 6.3) — one implementation,
-    so a player's card looks the same no matter how it was opened."""
-    if not target.xuid:
+    so a player's card looks the same no matter how it was opened.
+
+    Works for a Steam-only person too (SPEC 9, M-Steam-2e) — used to bail
+    out on `not target.xuid` alone, which meant no card at all for anyone
+    without Xbox connected."""
+    platform_links = await repo.platform_links_of(target.tg_id)
+    if not target.xuid and not platform_links:
         return None
 
-    counters = await counters_for(repo, target.xuid)
-    lines = [
-        f"📊 <b>{html_escape(target.gamertag or 'без геймертега')}</b>  ·  "
-        f"gamerscore {thousands(target.gamerscore or 0)}",
+    counters = await counters_for(repo, target.tg_id)
+    lines = [f"📊 <b>{html_escape(_display_name(target, platform_links))}</b>"]
+    if target.xuid:
+        lines.append(
+            f"🟢 Xbox: {html_escape(target.gamertag or 'без геймертега')}  ·  "
+            f"gamerscore {thousands(target.gamerscore or 0)}"
+        )
+    for link in platform_links:
+        icon = _PLATFORM_ICON.get(link.platform, "⚪")
+        label = _PLATFORM_LABEL.get(link.platform, link.platform)
+        lines.append(f"{icon} {label}: {html_escape(link.display_name or link.external_id)}")
+
+    lines += [
         "",
         f"Сегодня:   {plural_achievements(counters.today)} (+{counters.today_score} G)",
         f"За месяц:  {plural_achievements(counters.month)} (+{thousands(counters.month_score)} G)",
@@ -205,14 +235,17 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
         # date-bounded one can — better absent than quietly wrong (SPEC 5.4).
     ]
 
-    # 0 = no cap (SPEC 6.4) — the list lives in a collapsible quote either
-    # way, so there is no separate "показать все игры" tap needed any more
-    # (dropped along with the old fixed-height table).
-    limit = await _stats_games_limit(repo)
-    since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
-    games = await repo.recent_games(target.xuid, since, limit=limit)
-    if games:
-        lines += ["", f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>", _games_list(games)]
+    # Xbox-only for now (SPEC 9, M-Steam-2c's own scoping note) — a Steam
+    # recently-played source doesn't exist yet, so this stays exactly what
+    # it was rather than silently showing an incomplete cross-platform list.
+    if target.xuid:
+        # 0 = no cap (SPEC 6.4) — the list lives in a collapsible quote
+        # either way, no separate "показать все игры" tap needed any more.
+        limit = await _stats_games_limit(repo)
+        since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
+        games = await repo.recent_games(target.xuid, since, limit=limit)
+        if games:
+            lines += ["", f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>", _games_list(games)]
     return "\n".join(lines)
 
 
@@ -232,7 +265,7 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
         return
     text = await _build_stats_text(repo, target)
     if text is None:
-        await message.answer("Этот человек ещё не подключил Xbox.")
+        await message.answer("Этот человек ещё ничего не подключил.")
         return
     await message.answer(text, parse_mode=ParseMode.HTML)
 

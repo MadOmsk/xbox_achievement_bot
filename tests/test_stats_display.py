@@ -54,8 +54,11 @@ async def test_header_gamerscore_is_the_profile_value_not_a_sum(repo: Repo) -> N
     text = await _build_stats_text(repo, user)
 
     assert text is not None
-    assert "999" in text.split("\n")[0]  # thousands() formatting, profile value
-    assert "10 G" not in text.split("\n")[0]
+    # Line 0 is just the display name now (SPEC 9, M-Steam-2e); the Xbox
+    # line with its gamerscore is line 1.
+    xbox_line = text.split("\n")[1]
+    assert "999" in xbox_line  # thousands() formatting, profile value
+    assert "10 G" not in xbox_line
 
 
 async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:

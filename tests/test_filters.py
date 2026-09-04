@@ -34,11 +34,10 @@ def achievement(
     )
 
 
-def user(rarity_mode: str = "all", show_x360: bool = True) -> UserSettings:
+def user(rarity_mode: str = "all") -> UserSettings:
     return UserSettings(
         tg_id=1,
         rarity_mode=rarity_mode,
-        show_x360=show_x360,
         digest_threshold=3,
         tz_offset_min=180,
     )
@@ -67,31 +66,29 @@ def test_rarity_threshold_is_the_chat_setting(
     assert passes_filters(achievement(rarity), user("rare"), chat(), threshold) is expected
 
 
-def test_x360_passes_rare_mode_when_the_switch_is_on() -> None:
-    """Rarity is unknown for Xbox 360, not "too common" — a filter it has no
-    data for must not silently hide it (SPEC 5.5)."""
+def test_x360_passes_rare_mode_regardless_of_rarity() -> None:
+    """Rarity is unknown for Xbox 360, not "too common" — a platform with no
+    rarity data at all is exempt from the rarity check, not hidden by it
+    (SPEC 5.5, 1.4 — one rarity_mode for every platform since M-Steam-2e,
+    no more separate show_x360 switch)."""
     item = achievement(rarity=None, platform="x360")
-    assert passes_filters(item, user("rare", show_x360=True), chat(), 10.0) is True
+    assert passes_filters(item, user("rare"), chat(), 10.0) is True
 
 
-def test_x360_switch_off_hides_it_regardless_of_rarity_mode() -> None:
+def test_hidden_mode_hides_every_platform_including_x360() -> None:
+    """One switch for every platform (SPEC 9, M-Steam-2e) — 'hidden' now
+    silences Xbox 360 too, not just the modern feed."""
+    assert passes_filters(achievement(rarity=30.0), user("hidden"), chat(), 10.0) is False
     item = achievement(rarity=None, platform="x360")
-    assert passes_filters(item, user("all", show_x360=False), chat(), 10.0) is False
-
-
-def test_hidden_mode_hides_modern_achievements_entirely() -> None:
-    """The One/Series/PC counterpart of show_x360=0 — the modern feed off
-    entirely regardless of the chat's threshold."""
-    item = achievement(rarity=30.0)
     assert passes_filters(item, user("hidden"), chat(), 10.0) is False
 
 
-def test_hidden_mode_does_not_touch_x360() -> None:
-    """A modern-only switch must not silence Xbox 360, which has its own
-    show_x360 toggle (SPEC 5.5)."""
-    item = achievement(rarity=None, platform="x360")
-    assert passes_filters(item, user("hidden", show_x360=True), chat(), 10.0) is True
-    assert passes_filters(item, user("hidden", show_x360=False), chat(), 10.0) is False
+def test_steam_is_not_exempt_from_the_rarity_check() -> None:
+    """Unlike Xbox 360, Steam has a real rarity_percent (M-Steam-2b) — it
+    goes through the ordinary rarity check, no platform exemption."""
+    item = achievement(rarity=30.0, platform="steam")
+    assert passes_filters(item, user("rare"), chat(), 10.0) is False  # 30% > 10% threshold
+    assert passes_filters(item, user("rare"), chat(), 50.0) is True
 
 
 def test_rarity_mode_is_the_users_own_choice_only() -> None:

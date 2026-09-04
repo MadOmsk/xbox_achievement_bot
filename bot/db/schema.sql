@@ -60,11 +60,16 @@ CREATE TABLE IF NOT EXISTS chat_seen (
 
 CREATE TABLE IF NOT EXISTS user_settings (
     tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-    -- 'hidden' is the One/Series/PC counterpart of show_x360: the modern
-    -- achievement feed off entirely, not just filtered to the rare ones.
+    -- One mode for every platform the person has connected (Xbox modern,
+    -- Xbox 360, Steam) — not a switch per platform (M-Steam-2e, SPEC 1.4).
+    -- 'hidden' turns the whole feed off, on any platform. A platform with
+    -- no rarity_percent at all (currently only Xbox 360) is exempt from
+    -- the rarity check under 'rare' — shown as under 'all' instead, since
+    -- "no data" isn't "too common" (SPEC 5.5, services/achievements.py).
+    -- There used to be a separate show_x360 column here; folded into this
+    -- one when Steam arrived rather than getting a second one of its own.
     rarity_mode      TEXT    NOT NULL DEFAULT 'all'
                      CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
-    show_x360        INTEGER NOT NULL DEFAULT 1,
     digest_threshold INTEGER NOT NULL DEFAULT 3,
     muted_title_ids  TEXT    NOT NULL DEFAULT '[]',
     tz_offset_min    INTEGER                       -- minutes from UTC, NULL = global timezone
@@ -157,6 +162,20 @@ CREATE TABLE IF NOT EXISTS presence_state (
     title_name       TEXT,
     changed_at       TEXT,     -- when title_id or state last changed
     last_ach_poll_at TEXT,     -- when achievements were last fetched (debounce)
+    updated_at       TEXT
+);
+
+-- Steam's own presence (M-Steam-2c, SPEC 9) — separate table, not a reuse of
+-- presence_state above: different shape (persona_state/gameid, not
+-- state/title_id) and its own debounce, keyed by steam_id like the Xbox one
+-- is keyed by xuid.
+CREATE TABLE IF NOT EXISTS steam_presence_state (
+    steam_id         TEXT PRIMARY KEY,
+    persona_state    INTEGER,  -- Steam's own enum, 0=offline..6
+    gameid           TEXT,     -- NULL when not in a game
+    game_name        TEXT,     -- gameextrainfo at the moment of the last change
+    changed_at       TEXT,
+    last_ach_poll_at TEXT,
     updated_at       TEXT
 );
 

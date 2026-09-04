@@ -62,10 +62,12 @@ def format_digest(threshold: int) -> str:
     return "никогда" if threshold >= DIGEST_NEVER else f"от {threshold} ачивок"
 
 
-# The One/Series/PC counterpart of the Xbox 360 switch below it: same three
-# choices in spirit — show everything, show only the rare ones, or nothing.
-# A click cycles to the next one, same interaction as the x360 button, rather
-# than opening a submenu — one tap, not two, for a three-way toggle.
+# One mode governs every connected platform at once (SPEC 9, M-Steam-2e) —
+# show everything, show only the rare ones, or nothing. A click cycles to
+# the next one rather than opening a submenu — one tap, not two, for a
+# three-way toggle. Used to have a separate Xbox 360 show/hide switch next
+# to this one; folded in here instead of growing a second platform-specific
+# toggle when Steam arrived (services/achievements.py::passes_filters).
 RARITY_CHOICES = ("all", "rare", "hidden")
 
 
@@ -101,7 +103,6 @@ def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMar
 def panel_keyboard(
     tz_offset_min: int | None,
     rarity_mode: str = "all",
-    show_x360: bool = True,
     digest_threshold: int = 3,
     *,
     connected: bool = True,
@@ -122,14 +123,8 @@ def panel_keyboard(
     rows += [
         [
             InlineKeyboardButton(
-                text=f"One/Series/PC: {format_rarity(rarity_mode)}",
+                text=f"Ачивки: {format_rarity(rarity_mode)}",
                 callback_data="panel:rarity",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"Xbox 360: {'показывать' if show_x360 else 'не показывать'}",
-                callback_data="panel:x360",
             )
         ],
         [

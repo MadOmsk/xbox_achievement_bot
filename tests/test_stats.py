@@ -68,7 +68,7 @@ async def test_counters_include_backfilled_rows(repo: Repo) -> None:
         is_backfill=False,
     )
 
-    counters = await counters_for(repo, XUID, now)
+    counters = await counters_for(repo, 1, now)
 
     assert (counters.today, counters.today_score) == (1, 15)
     assert (counters.month, counters.month_score) == (3, 40)
@@ -92,7 +92,7 @@ async def test_counters_today_crosses_midnight_correctly(repo: Repo) -> None:
         is_backfill=False,
     )
 
-    counters = await counters_for(repo, XUID, now)
+    counters = await counters_for(repo, 1, now)
 
     assert counters.today == 2
     assert counters.today_score == 30

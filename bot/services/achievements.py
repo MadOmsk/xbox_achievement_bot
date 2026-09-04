@@ -25,6 +25,15 @@ def rarity_badge(rarity_percent: float | None) -> str:
     return ""
 
 
+#  Platforms with no rarity data at all — the rarity filter can't decide
+#  "rare" for them, so 'rare' mode falls back to showing everything, the
+#  same way 'all' mode would (SPEC 5.5, 1.4). Currently only Xbox 360
+#  (contract 1 never carries a rarity block); Steam is NOT here — it has a
+#  real rarity_percent (GetGlobalAchievementPercentagesForApp, M-Steam-2b),
+#  so it goes through the ordinary rarity check like modern Xbox.
+_NO_RARITY_DATA_PLATFORMS = {"x360"}
+
+
 def passes_filters(
     achievement: AchievementRow,
     user: UserSettings,
@@ -38,18 +47,19 @@ def passes_filters(
     chat-level rarity toggle used to gate this too, dropped once it turned
     out redundant with the user's own choice and just added a second switch
     people had to find and agree on.
-    """
-    if achievement.platform == "x360":
-        # Xbox 360 has no rarity data at all — visibility is decided solely by
-        # the show_x360 switch, never by the rarity filter below (SPEC 5.5).
-        return user.show_x360
 
+    One `rarity_mode`, not one per platform (SPEC 9, M-Steam-2e) — there
+    used to be a separate `show_x360` switch here, folded into this single
+    check when Steam arrived rather than growing a second platform-specific
+    toggle to match it.
+    """
     if user.rarity_mode == "hidden":
-        # The One/Series/PC counterpart of show_x360=0: the modern feed off
-        # entirely.
+        # Every platform's feed off entirely.
         return False
 
-    if not _passes_rarity(achievement, user.rarity_mode, rare_threshold):
+    if achievement.platform not in _NO_RARITY_DATA_PLATFORMS and not _passes_rarity(
+        achievement, user.rarity_mode, rare_threshold
+    ):
         return False
 
     if achievement.gamerscore < chat.min_gamerscore:

@@ -63,7 +63,6 @@ class TokenRecord:
 class UserSettings:
     tg_id: int
     rarity_mode: str
-    show_x360: bool
     digest_threshold: int
     tz_offset_min: int | None
 
@@ -77,6 +76,22 @@ class PollTarget:
     state: str | None
     title_id: str | None
     title_name: str | None
+    changed_at: str | None
+    last_ach_poll_at: str | None
+    updated_at: str | None
+
+
+@dataclass(slots=True)
+class SteamPollTarget:
+    """Steam's counterpart of `PollTarget` (SPEC 9, M-Steam-2c) — same
+    shape, Steam's own field names (`persona_state`/`gameid`/`game_name`
+    instead of `state`/`title_id`/`title_name`)."""
+
+    tg_id: int
+    steam_id: str
+    persona_state: int | None
+    gameid: str | None
+    game_name: str | None
     changed_at: str | None
     last_ach_poll_at: str | None
     updated_at: str | None
@@ -160,11 +175,18 @@ class PresenceRow:
 
 @dataclass(slots=True)
 class ChatPresenceRow:
-    """One row of /online (SPEC 6.3): a subscribed member plus his presence."""
+    """One row of /online (SPEC 6.3): a subscribed member plus his presence.
+
+    `state`/`title_id`/`title_name` are already normalized to Xbox's own
+    vocabulary regardless of which platform they actually came from (SPEC 9,
+    M-Steam-2e) — the query picks whichever platform's presence updated more
+    recently and translates Steam's own persona_state/gameid into the same
+    shape, so nothing downstream needs to know Steam presence exists at all.
+    """
 
     tg_id: int
     gamertag: str | None
-    xuid: str
+    xuid: str | None  # can be unset for a Steam-only person
     state: str | None
     title_id: str | None
     title_name: str | None
@@ -174,7 +196,7 @@ class ChatPresenceRow:
 class ChatMemberStat:
     tg_id: int
     gamertag: str | None
-    xuid: str
+    xuid: str | None  # can be unset for a Steam-only person (SPEC 9, M-Steam-2e)
     count: int
     score: int
     rare: int
@@ -452,7 +474,7 @@ class Repo:
         return _as_user_settings(row) if row else None
 
     async def update_user_settings(self, tg_id: int, **fields: Any) -> None:
-        allowed = {"rarity_mode", "show_x360", "digest_threshold", "tz_offset_min"}
+        allowed = {"rarity_mode", "digest_threshold", "tz_offset_min"}
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"unknown user_settings fields: {sorted(unknown)}")
@@ -584,6 +606,70 @@ class Repo:
         )
         await self._conn.commit()
 
+    # ------------------------------------------------------- Steam polling
+
+    async def steam_pollable_users(self) -> list[SteamPollTarget]:
+        """Who the Steam poller may look at (SPEC 9, M-Steam-2c) — no `tokens`
+        JOIN here unlike `pollable_users()`: Steam has no per-user OAuth at
+        all, one shared API key for the whole bot (M-Steam-1)."""
+        cursor = await self._conn.execute(
+            "SELECT u.tg_id, pl.external_id AS steam_id, p.persona_state, p.gameid,"
+            "       p.game_name, p.changed_at, p.last_ach_poll_at, p.updated_at "
+            "FROM platform_links pl "
+            "JOIN users u ON u.tg_id = pl.tg_id "
+            "LEFT JOIN steam_presence_state p ON p.steam_id = pl.external_id "
+            "WHERE pl.platform = 'steam' AND u.is_excluded = 0"
+        )
+        return [
+            SteamPollTarget(
+                tg_id=row["tg_id"],
+                steam_id=row["steam_id"],
+                persona_state=row["persona_state"],
+                gameid=row["gameid"],
+                game_name=row["game_name"],
+                changed_at=row["changed_at"],
+                last_ach_poll_at=row["last_ach_poll_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def save_steam_presence_state(
+        self,
+        steam_id: str,
+        persona_state: int,
+        gameid: str | None,
+        game_name: str | None,
+        *,
+        changed: bool,
+    ) -> None:
+        now = utcnow_iso()
+        await self._conn.execute(
+            "INSERT INTO steam_presence_state "
+            "(steam_id, persona_state, gameid, game_name, changed_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(steam_id) DO UPDATE SET "
+            "  persona_state = excluded.persona_state, gameid = excluded.gameid,"
+            "  game_name = excluded.game_name, updated_at = excluded.updated_at,"
+            "  changed_at = CASE WHEN ? THEN excluded.changed_at "
+            "                 ELSE steam_presence_state.changed_at END",
+            (steam_id, persona_state, gameid, game_name, now, now, 1 if changed else 0),
+        )
+        await self._conn.commit()
+
+    async def mark_steam_achievements_polled(self, steam_id: str) -> None:
+        await self._conn.execute(
+            "UPDATE steam_presence_state SET last_ach_poll_at = ? WHERE steam_id = ?",
+            (utcnow_iso(), steam_id),
+        )
+        await self._conn.commit()
+
+    async def delete_steam_presence_state(self, steam_id: str) -> None:
+        await self._conn.execute(
+            "DELETE FROM steam_presence_state WHERE steam_id = ?", (steam_id,)
+        )
+        await self._conn.commit()
+
     # -------------------------------------------------------- achievements
 
     async def insert_new_achievements(
@@ -622,6 +708,55 @@ class Repo:
                 (
                     tg_id,
                     xuid,
+                    item.title_id,
+                    item.achievement_id,
+                    item.name,
+                    item.description,
+                    item.icon_url,
+                    item.unlocked_at,
+                    item.gamerscore,
+                    item.rarity_percent,
+                    item.platform,
+                    1 if is_backfill else 0,
+                    1 if item.is_secret else 0,
+                    now,
+                ),
+            )
+            if cursor.rowcount:
+                new_rows.append(item)
+        await self._conn.commit()
+        return new_rows
+
+    async def insert_new_achievements_steam(
+        self,
+        tg_id: int,
+        steam_id: str,
+        achievements: Sequence[AchievementRow],
+        *,
+        is_backfill: bool,
+    ) -> list[AchievementRow]:
+        """Steam's counterpart of `insert_new_achievements` (SPEC 9, M-Steam-
+        2c/2d) — no xuid-lookup stopgap needed here: the Steam poller/backfill
+        always already has `tg_id` on hand, straight from `platform_links`,
+        unlike the Xbox path which only ever has an xuid to start from. The
+        `xuid` column in `seen_achievements` is the same generic per-platform
+        external_id it's always been (SPEC 9, M-Steam-2a) — holds the
+        SteamID64 here, not an Xbox xuid.
+        """
+        if not achievements:
+            return []
+
+        new_rows: list[AchievementRow] = []
+        now = utcnow_iso()
+        for item in achievements:
+            cursor = await self._conn.execute(
+                "INSERT OR IGNORE INTO seen_achievements "
+                "(tg_id, xuid, title_id, achievement_id, name, description, icon_url, unlocked_at,"
+                " gamerscore, rarity_percent, platform, is_backfill, is_secret, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    tg_id,
+                    steam_id,
                     item.title_id,
                     item.achievement_id,
                     item.name,
@@ -881,6 +1016,34 @@ class Repo:
         row = await cursor.fetchone()
         return (int(row[0]), int(row[1])) if row else (0, 0)
 
+    async def achievement_counts_for_person(
+        self, tg_id: int, since: datetime | None
+    ) -> tuple[int, int]:
+        """Same as `achievement_counts`, but summed across every platform a
+        person has connected (SPEC 9, M-Steam-2e) — `/stats`/`/summary`'s
+        counters, not `achievement_counts`' own caller (`scripts/reconcile_
+        achievements.py`, which deliberately stays per-Xbox-account: it
+        checks one xuid's stored gamerscore against what Xbox itself
+        reports for that xuid, a comparison that has no Steam side to sum
+        in). `gamerscore` sums correctly here with no special-casing: a
+        Steam row's gamerscore is always 0 (services/steam/achievements.py),
+        so it never contributes to the sum, by construction, not by a check
+        here."""
+        if since is None:
+            cursor = await self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
+                "WHERE tg_id = ?",
+                (tg_id,),
+            )
+        else:
+            cursor = await self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
+                "WHERE tg_id = ? AND unlocked_at >= ?",
+                (tg_id, _iso(since)),
+            )
+        row = await cursor.fetchone()
+        return (int(row[0]), int(row[1])) if row else (0, 0)
+
     async def achievement_counts_by_xuid(
         self, since: datetime | None
     ) -> dict[str, tuple[int, int]]:
@@ -928,7 +1091,12 @@ class Repo:
             "                THEN 1 ELSE 0 END) AS rare "
             "FROM subscriptions sub "
             "JOIN users u ON u.tg_id = sub.tg_id "
-            "LEFT JOIN seen_achievements s ON s.xuid = u.xuid " + date_bound + " "
+            # tg_id, not xuid (SPEC 9, M-Steam-2e) — sums every platform's
+            # achievements for this person into one count, since
+            # seen_achievements.tg_id is on every row regardless of platform
+            # (2a). gamerscore stays Xbox-only automatically: a Steam row's
+            # gamerscore is always 0 (services/steam/achievements.py).
+            "LEFT JOIN seen_achievements s ON s.tg_id = u.tg_id " + date_bound + " "
             "WHERE sub.chat_id = ? AND u.is_excluded = 0 "
             "GROUP BY u.tg_id ORDER BY cnt DESC, score DESC",
             [rare_threshold, *date_params, chat_id],
@@ -953,22 +1121,51 @@ class Repo:
         and being a member are not the same thing, and /online listing only
         publishers made it look like nobody else was playing. Playing-now
         first, then online, then the rest, so the people actually worth
-        pinging float to the top."""
+        pinging float to the top.
+
+        Merges Xbox and Steam presence (SPEC 9, M-Steam-2e): whichever
+        platform's presence row updated more recently wins, normalized into
+        the same `state`/`title_id`/`title_name` shape Xbox always used, so
+        nothing downstream (`_presence_text`/`_presence_icon`, `handlers/
+        chat.py`) needs to know Steam presence exists at all. A person known
+        only through Steam now appears here too — used to require `u.xuid
+        IS NOT NULL`, which silently dropped Steam-only members entirely.
+        """
         cursor = await self._conn.execute(
-            "SELECT u.tg_id, u.gamertag, u.xuid, p.state, p.title_id, p.title_name "
-            "FROM ("
+            "WITH member AS ("
             "  SELECT tg_id FROM subscriptions WHERE chat_id = ? "
             "  UNION "
             "  SELECT tg_id FROM chat_seen WHERE chat_id = ?"
-            ") member "
-            "JOIN users u ON u.tg_id = member.tg_id "
-            "LEFT JOIN presence_state p ON p.xuid = u.xuid "
-            "WHERE u.xuid IS NOT NULL AND u.is_excluded = 0 "
+            "), presence AS ("
+            "  SELECT u.tg_id, u.gamertag, u.xuid,"
+            "         CASE WHEN sp.updated_at IS NOT NULL"
+            "                   AND (xp.updated_at IS NULL OR sp.updated_at > xp.updated_at)"
+            "              THEN 1 ELSE 0 END AS steam_is_fresher,"
+            "         xp.state AS xbox_state, xp.title_id AS xbox_title_id,"
+            "         xp.title_name AS xbox_title_name,"
+            "         sp.persona_state AS steam_persona_state, sp.gameid AS steam_gameid,"
+            "         sp.game_name AS steam_game_name, pl.external_id AS steam_external_id"
+            "  FROM member"
+            "  JOIN users u ON u.tg_id = member.tg_id"
+            "  LEFT JOIN presence_state xp ON xp.xuid = u.xuid"
+            "  LEFT JOIN platform_links pl ON pl.tg_id = u.tg_id AND pl.platform = 'steam'"
+            "  LEFT JOIN steam_presence_state sp ON sp.steam_id = pl.external_id"
+            "  WHERE (u.xuid IS NOT NULL OR pl.external_id IS NOT NULL) AND u.is_excluded = 0"
+            ") "
+            "SELECT tg_id, gamertag, xuid,"
+            "       CASE WHEN steam_is_fresher THEN"
+            "              CASE WHEN steam_persona_state != 0 THEN 'Online' ELSE 'Offline' END"
+            "            ELSE xbox_state END AS state,"
+            "       CASE WHEN steam_is_fresher THEN steam_gameid ELSE xbox_title_id END"
+            "         AS title_id,"
+            "       CASE WHEN steam_is_fresher THEN steam_game_name ELSE xbox_title_name END"
+            "         AS title_name "
+            "FROM presence "
             "ORDER BY "
-            "  CASE WHEN p.state = 'Online' AND p.title_id IS NOT NULL THEN 0 "
-            "       WHEN p.state = 'Online' THEN 1 "
+            "  CASE WHEN state = 'Online' AND title_id IS NOT NULL THEN 0 "
+            "       WHEN state = 'Online' THEN 1 "
             "       ELSE 2 END, "
-            "  u.gamertag",
+            "  gamertag",
             (chat_id, chat_id),
         )
         return [
@@ -1432,7 +1629,6 @@ def _as_user_settings(row: aiosqlite.Row) -> UserSettings:
     return UserSettings(
         tg_id=row["tg_id"],
         rarity_mode=row["rarity_mode"],
-        show_x360=bool(row["show_x360"]),
         digest_threshold=row["digest_threshold"],
         tz_offset_min=row["tz_offset_min"],
     )

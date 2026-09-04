@@ -560,7 +560,7 @@ async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     if user is None or not user.xuid:
         return "Пользователь не найден.", _back_home()
 
-    counters = await counters_for(repo, user.xuid)
+    counters = await counters_for(repo, tg_id)
     token = await repo.get_token(tg_id)
     presence = await repo.presence_of(user.xuid)
     chats = await repo.chats_of_user(tg_id)

@@ -125,21 +125,14 @@ async def panel_sync(
 
 @router.callback_query(F.data == "panel:rarity")
 async def panel_rarity_cycle(callback: CallbackQuery, repo: Repo) -> None:
-    """Three modes for One/Series/PC, mirroring the show/hide switch below it
-    for Xbox 360 — the threshold itself stays the admin's (SPEC 1.4). One tap
-    advances to the next mode, the same interaction as the x360 toggle."""
+    """One mode for every connected platform (SPEC 9, M-Steam-2e; used to be
+    paired with a separate Xbox 360 show/hide switch, folded into this one
+    instead of growing a second per-platform toggle) — the threshold itself
+    stays the admin's (SPEC 1.4). One tap advances to the next mode."""
     settings_row = await repo.get_user_settings(callback.from_user.id)
     current = settings_row.rarity_mode if settings_row else "all"
     mode = next_rarity_mode(current)
     await repo.update_user_settings(callback.from_user.id, rarity_mode=mode)
-    await _redraw(callback, repo)
-
-
-@router.callback_query(F.data == "panel:x360")
-async def panel_x360(callback: CallbackQuery, repo: Repo) -> None:
-    settings_row = await repo.get_user_settings(callback.from_user.id)
-    current = settings_row.show_x360 if settings_row else True
-    await repo.update_user_settings(callback.from_user.id, show_x360=0 if current else 1)
     await _redraw(callback, repo)
 
 
@@ -384,7 +377,6 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     keyboard = panel_keyboard(
         tz_offset,
         settings_row.rarity_mode if settings_row else "all",
-        settings_row.show_x360 if settings_row else True,
         settings_row.digest_threshold if settings_row else 3,
         connected=connected,
         needs_reconnect=needs_reconnect,
@@ -397,7 +389,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         return text, keyboard
 
     login = LOGIN_STATUS.get(token.status, "— не подключён") if token else "— не подключён"
-    counters = await counters_for(repo, user.xuid)
+    counters = await counters_for(repo, tg_id)
     playing = await _now_playing(repo, user.xuid)
     recent = await repo.recent_achievements(user.xuid, RECENT_IN_PANEL)
 
