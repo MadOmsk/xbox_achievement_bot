@@ -14,20 +14,12 @@ import logging
 
 from bot.config import Settings
 from bot.db.repo import PollTarget, Repo
+from bot.poller.cadence import debounce_passed, is_due, presence_interval
 from bot.poller.fetcher import Fetcher
 from bot.services.xbox.auth import NotConnectedError, TokenDeadError, TokenRefreshError
 from bot.services.xbox.client import PresenceSnapshot, XboxApiError, XboxClient
-from bot.util import parse_iso, utcnow
 
 log = logging.getLogger(__name__)
-
-IDLE_AFTER_SECONDS = 2 * 3600
-
-# The tick fires every 60s, but a timestamp is written a moment after the tick
-# begins, so the next tick measures 59.x seconds and decides it is too early.
-# Every interval would then silently double: presence once in two minutes,
-# achievements once in four. The tolerance must be smaller than the tick.
-DUE_TOLERANCE_SECONDS = 5
 
 
 class PresencePoller:
@@ -114,33 +106,21 @@ class PresencePoller:
         )
 
     def _debounce_passed(self, target: PollTarget) -> bool:
-        """No more than one achievement request per game every two minutes."""
-        last = parse_iso(target.last_ach_poll_at)
-        if last is None:
-            return True
-        elapsed = (utcnow() - last).total_seconds()
-        return elapsed >= self._settings.achievement_poll_interval - DUE_TOLERANCE_SECONDS
+        return debounce_passed(target.last_ach_poll_at, self._settings.achievement_poll_interval)
 
     def _is_due(self, target: PollTarget) -> bool:
-        last = parse_iso(target.updated_at)
-        if last is None:
-            return True
-        return (utcnow() - last).total_seconds() >= self._interval(target) - DUE_TOLERANCE_SECONDS
+        return is_due(target.updated_at, self._interval(target))
 
     def _interval(self, target: PollTarget) -> int:
-        """Sparser polling of absent people is politeness, not thrift: the
-        Microsoft budget is nowhere near a constraint (SPEC 5.2)."""
-        if target.state == "Online":
-            return (
-                self._settings.presence_interval_in_game
-                if target.title_id
-                else self._settings.presence_interval_online
-            )
-        changed = parse_iso(target.changed_at)
-        offline_for = (utcnow() - changed).total_seconds() if changed else 0.0
-        if offline_for >= IDLE_AFTER_SECONDS:
-            return self._settings.presence_interval_idle
-        return self._settings.presence_interval_offline
+        return presence_interval(
+            online=target.state == "Online",
+            in_game=bool(target.title_id),
+            changed_at=target.changed_at,
+            interval_in_game=self._settings.presence_interval_in_game,
+            interval_online=self._settings.presence_interval_online,
+            interval_offline=self._settings.presence_interval_offline,
+            interval_idle=self._settings.presence_interval_idle,
+        )
 
     async def _gamertag(self, tg_id: int) -> str:
         user = await self._repo.get_user(tg_id)

@@ -18,14 +18,13 @@ from collections.abc import Iterator
 
 from bot.config import Settings
 from bot.db.repo import Repo, SteamPollTarget
+from bot.poller.cadence import debounce_passed, is_due, presence_interval
 from bot.poller.steam_fetcher import SteamFetcher
 from bot.services.steam.client import SteamApiError, SteamPresence, get_presence_batch
 from bot.util import parse_iso, utcnow
 
 log = logging.getLogger(__name__)
 
-IDLE_AFTER_SECONDS = 2 * 3600
-DUE_TOLERANCE_SECONDS = 5  # same reasoning as presence.py's own constant
 BATCH_SIZE = 100  # GetPlayerSummaries' own documented limit per call
 
 # Found live: Steam's own presence (GetPlayerSummaries) sometimes stops
@@ -147,38 +146,27 @@ class SteamPresencePoller:
         )
 
     def _debounce_passed(self, target: SteamPollTarget) -> bool:
-        """No more than one achievement request per game every two minutes
-        (same interval Xbox uses, SPEC 5.3) — reused rather than a separate
-        Steam-specific setting, since the politeness reasoning is identical
-        and Steam's own budget is nowhere near a constraint either."""
-        last = parse_iso(target.last_ach_poll_at)
-        if last is None:
-            return True
-        elapsed = (utcnow() - last).total_seconds()
-        return elapsed >= self._settings.achievement_poll_interval - DUE_TOLERANCE_SECONDS
+        # Reuses Xbox's own achievement_poll_interval rather than a separate
+        # Steam-specific setting — the politeness reasoning is identical and
+        # Steam's own budget is nowhere near a constraint either (SPEC 5.3).
+        return debounce_passed(target.last_ach_poll_at, self._settings.achievement_poll_interval)
 
     def _is_due(self, target: SteamPollTarget) -> bool:
-        last = parse_iso(target.updated_at)
-        if last is None:
-            return True
-        return (utcnow() - last).total_seconds() >= self._interval(target) - DUE_TOLERANCE_SECONDS
+        return is_due(target.updated_at, self._interval(target))
 
     def _interval(self, target: SteamPollTarget) -> int:
-        """Sparser polling of absent people is politeness, not thrift, same
-        as presence.py — reuses the same presence_interval_* settings
-        rather than a Steam-specific copy (SPEC 9, M-Steam-2c): Steam's own
-        budget isn't the constraint here either."""
-        if target.persona_state is not None and target.persona_state != 0:
-            return (
-                self._settings.presence_interval_in_game
-                if target.gameid
-                else self._settings.presence_interval_online
-            )
-        changed = parse_iso(target.changed_at)
-        offline_for = (utcnow() - changed).total_seconds() if changed else 0.0
-        if offline_for >= IDLE_AFTER_SECONDS:
-            return self._settings.presence_interval_idle
-        return self._settings.presence_interval_offline
+        # Reuses the same presence_interval_* settings as Xbox rather than a
+        # Steam-specific copy (SPEC 9, M-Steam-2c) — Steam's own budget isn't
+        # the constraint here either.
+        return presence_interval(
+            online=target.persona_state is not None and target.persona_state != 0,
+            in_game=bool(target.gameid),
+            changed_at=target.changed_at,
+            interval_in_game=self._settings.presence_interval_in_game,
+            interval_online=self._settings.presence_interval_online,
+            interval_offline=self._settings.presence_interval_offline,
+            interval_idle=self._settings.presence_interval_idle,
+        )
 
 
 def _chunks(items: list[SteamPollTarget], size: int) -> Iterator[list[SteamPollTarget]]:
