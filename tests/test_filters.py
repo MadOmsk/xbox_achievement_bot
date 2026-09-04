@@ -101,15 +101,15 @@ def test_min_gamerscore_and_mute() -> None:
 
 
 def test_single_message_mentions_rarity_and_badge() -> None:
-    text = format_single("Igor", achievement(rarity=2.4))
+    text = format_single("Igor", achievement(rarity=2.4), "Halo Infinite")
     assert "Igor получает достижение 🟢 Xbox" in text
-    assert "«Ashes to Ashes» · 20 G · редкость 2.4% 💎" in text
+    assert "Halo Infinite · «Ashes to Ashes» · 20 G · редкость 2.4% 💎" in text
 
 
 def test_single_message_for_x360_says_so_instead_of_rarity() -> None:
-    text = format_single("Igor", achievement(rarity=None, platform="x360"))
+    text = format_single("Igor", achievement(rarity=None, platform="x360"), "Halo 3")
     assert "Igor получает достижение 🟢 Xbox 360" in text
-    assert "«Ashes to Ashes» · 20 G" in text
+    assert "Halo 3 · «Ashes to Ashes» · 20 G" in text
     assert "редкость" not in text
 
 
@@ -118,14 +118,14 @@ def test_single_message_omits_gamerscore_for_steam() -> None:
     (services/steam/achievements.py) — "0 G" would read as a real score,
     not "not applicable" (SPEC 9, M-Steam-2e)."""
     item = achievement(rarity=92.2, platform="steam", gamerscore=0)
-    text = format_single("Igor", item)
+    text = format_single("Igor", item, "Deadlock")
     assert "G" not in text.split("\n")[1]
 
 
 def test_single_message_tags_the_platform() -> None:
     """SPEC 9, M-Steam-2e — found live: a Steam achievement with no platform
     mention at all was easy to miss among Xbox ones."""
-    text = format_single("Igor", achievement(rarity=92.2, platform="steam"))
+    text = format_single("Igor", achievement(rarity=92.2, platform="steam"), "Deadlock")
     assert "⚫ Steam" in text
 
 
@@ -139,13 +139,13 @@ def test_digest_counts_and_trims() -> None:
 def test_secret_achievement_name_and_description_are_spoilered() -> None:
     """Xbox's own isSecret does not redact name/description (found live) —
     hiding them is the bot's own doing, via a Telegram spoiler (SPEC 5.5, 7.1)."""
-    text = format_single("Igor", achievement(is_secret=True))
+    text = format_single("Igor", achievement(is_secret=True), "Halo Infinite")
     assert '<span class="tg-spoiler">Ashes to Ashes</span>' in text
     assert '<span class="tg-spoiler">Kill 100 enemies</span>' in text
 
 
 def test_non_secret_achievement_has_no_spoiler_markup() -> None:
-    text = format_single("Igor", achievement(is_secret=False))
+    text = format_single("Igor", achievement(is_secret=False), "Halo Infinite")
     assert "tg-spoiler" not in text
 
 
@@ -162,7 +162,7 @@ def test_gamertag_and_achievement_text_are_html_escaped() -> None:
     Telegram's parser, same reasoning as the daily summary's table."""
     weird = achievement()
     weird.name = "A&B<C>"
-    text = format_single("We>ird<Name", weird)
+    text = format_single("We>ird<Name", weird, "Hal&o")
     assert "<C>" not in text
     assert "&amp;" in text and "&lt;" in text
 
