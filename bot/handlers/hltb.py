@@ -163,17 +163,17 @@ async def _is_awaited_reply(message: Message) -> bool:
 
 
 @router.message(_is_awaited_reply)
-async def hltb_query(message: Message, bot: Bot) -> None:
+async def hltb_query(message: Message, repo: Repo, bot: Bot) -> None:
     assert message.text is not None and message.reply_to_message is not None
     prompt_id = message.reply_to_message.message_id
     session = _sessions.get((message.chat.id, prompt_id))
     if session is None:  # pragma: no cover — filter already checked this
         return
-    await _run_search(bot, message.chat.id, prompt_id, session, message.text)
+    await _run_search(bot, repo, message.chat.id, prompt_id, session, message.text)
 
 
 @router.callback_query(F.data.startswith("hltb:qr:"))
-async def hltb_recent_pick(callback: CallbackQuery, bot: Bot) -> None:
+async def hltb_recent_pick(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
     if not isinstance(callback.message, Message):
         return
     key = (callback.message.chat.id, callback.message.message_id)
@@ -187,11 +187,11 @@ async def hltb_recent_pick(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer()
         return
     await callback.answer()
-    await _run_search(bot, key[0], key[1], session, session.recent_games[idx])
+    await _run_search(bot, repo, key[0], key[1], session, session.recent_games[idx])
 
 
 async def _run_search(
-    bot: Bot, chat_id: int, message_id: int, session: _Session, query: str
+    bot: Bot, repo: Repo, chat_id: int, message_id: int, session: _Session, query: str
 ) -> None:
     try:
         results = await search(query, limit=session.results_limit)
@@ -205,6 +205,14 @@ async def _run_search(
         text = f"По «{query}» ничего не нашёл, попробуй иначе."
         await _edit(bot, chat_id, message_id, text, None)
         return  # keep the session alive — the same reply target still works
+
+    if len(results) == 1:
+        # One match — asking "which of these?" over a single button is a
+        # pointless extra tap, just show the card straight away.
+        if not await _show_card(bot, repo, chat_id, message_id, results[0].hltb_id):
+            await _edit(bot, chat_id, message_id, UNAVAILABLE, None)
+        _sessions.pop((chat_id, message_id), None)
+        return
 
     session.results = results
     session.page = 0
@@ -274,15 +282,21 @@ async def hltb_pick(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
         return
     assert callback.data is not None
     hltb_id = int(callback.data.rsplit(":", 1)[1])
-    try:
-        result = await resolve(repo, hltb_id)
-    except HltbError:
+    chat_id, message_id = callback.message.chat.id, callback.message.message_id
+    if not await _show_card(bot, repo, chat_id, message_id, hltb_id):
         await callback.answer(UNAVAILABLE, show_alert=True)
         return
     await callback.answer()
-    chat_id, message_id = callback.message.chat.id, callback.message.message_id
     _sessions.pop((chat_id, message_id), None)
+
+
+async def _show_card(bot: Bot, repo: Repo, chat_id: int, message_id: int, hltb_id: int) -> bool:
+    try:
+        result = await resolve(repo, hltb_id)
+    except HltbError:
+        return False
     await _edit(bot, chat_id, message_id, _card(result), None, html=True)
+    return True
 
 
 def _card(result: HltbResult) -> str:
