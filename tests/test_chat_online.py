@@ -47,13 +47,24 @@ def test_never_polled() -> None:
     assert _presence_text(row) == "нет данных"
 
 
-def test_presence_icon_is_platform_colour_not_status() -> None:
-    """SPEC 9, M-Steam-2e: the circle marks which platform, not whether the
-    person is playing — status is already in the text next to it."""
+def test_presence_icon_is_platform_colour_while_online() -> None:
+    """SPEC 9, M-Steam-2e: online (playing or not) — the circle marks which
+    platform, not whether they're playing (status is already in the text
+    next to it). Playing and merely-online both get the platform colour."""
     assert _presence_icon(presence("Online", "123", "Halo Infinite", platform="modern")) == "🟢"
-    assert _presence_icon(presence("Offline", platform="modern")) == "🟢"
+    assert _presence_icon(presence("Online", None, platform="modern")) == "🟢"
     assert _presence_icon(presence("Online", "550", "L4D2", platform="steam")) == "⚫"
-    assert _presence_icon(presence(None, platform="steam")) == "⚫"
+    assert _presence_icon(presence("Online", None, platform="steam")) == "⚫"
+
+
+def test_presence_icon_is_grey_when_offline_regardless_of_platform() -> None:
+    """Found live: a pure platform colour made offline rows indistinguishable
+    from online ones — grey is the one thing a status colour is actually
+    good for, and it should mean the same thing on every platform."""
+    assert _presence_icon(presence("Offline", platform="modern")) == "⚪"
+    assert _presence_icon(presence("Offline", platform="steam")) == "⚪"
+    assert _presence_icon(presence(None, platform="modern")) == "⚪"
+    assert _presence_icon(presence(None, platform="steam")) == "⚪"
 
 
 def test_hub_keyboard_has_exactly_four_buttons_and_carries_the_chat_id() -> None:

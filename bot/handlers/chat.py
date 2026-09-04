@@ -187,9 +187,9 @@ def _games_list(games: list[TopGame]) -> str:
 
 
 # Marker circles for the platform lines in /stats' header, and for
-# /online's per-name icon too (_presence_icon below, SPEC 9, M-Steam-2e) —
-# same colours, same meaning, both just tag which platform. PlayStation
-# isn't linkable yet, kept for when it is.
+# /online's per-name icon while online (_presence_icon below, SPEC 9,
+# M-Steam-2e — offline/no-data there stays grey, not platform-coloured).
+# PlayStation isn't linkable yet, kept for when it is.
 _PLATFORM_ICON = {"modern": "🟢", "steam": "⚫", "psn": "🔵"}
 _PLATFORM_LABEL = {"steam": "Steam", "psn": "PlayStation"}
 
@@ -293,8 +293,14 @@ def _presence_text(row: ChatPresenceRow) -> str:
 
 
 def _presence_icon(row: ChatPresenceRow) -> str:
-    # Platform colour, not status (SPEC 9, M-Steam-2e) — status is already
-    # in the text next to it (_presence_text); same palette as /stats.
+    # Platform colour while online (SPEC 9, M-Steam-2e; same palette as
+    # /stats) — but grey for offline/no data regardless of platform.
+    # Found live: a pure platform colour made every offline row look the
+    # same as an online one at a glance, losing the one signal a colour
+    # is actually good for — grey is the "nothing to see here" cue, and
+    # that's true the same way on every platform.
+    if row.state != "Online":
+        return "⚪"
     return _PLATFORM_ICON.get(row.platform, "⚪")
 
 

@@ -338,8 +338,16 @@ def _as_entry(title: object) -> TitleHistoryEntry:
     )
 
 
+# Microsoft's own shell/app entries, not games — found live: "XBOX"
+# (title_id 704208617) resolves via titlehub to 0 max_gamerscore and 0
+# achievements at all, the Xbox app itself rather than something someone
+# is playing (SPEC 5.2/5.3 — this fed straight into /online showing
+# "играет — XBOX" instead of what the person was actually doing).
+_SYSTEM_TITLE_NAMES = {"home", "xbox"}
+
+
 def _current_title(item: object) -> tuple[str | None, str | None, str | None]:
-    """The game a person is actually playing, not the dashboard behind it."""
+    """The game a person is actually playing, not the dashboard/app behind it."""
     for device in getattr(item, "devices", None) or []:
         for title in getattr(device, "titles", None) or []:
             if getattr(title, "placement", None) != "Full":
@@ -347,7 +355,7 @@ def _current_title(item: object) -> tuple[str | None, str | None, str | None]:
             if getattr(title, "state", None) != "Active":
                 continue
             name = getattr(title, "name", None)
-            if name == "Home":  # the dashboard is not a game
+            if name and name.strip().lower() in _SYSTEM_TITLE_NAMES:
                 continue
             return str(title.id), name, getattr(device, "type", None)
     return None, None, None
