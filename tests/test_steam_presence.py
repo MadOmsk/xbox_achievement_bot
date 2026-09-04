@@ -123,6 +123,109 @@ async def test_tick_does_a_final_poll_of_the_old_game_when_it_changes(
     assert fetcher.calls == [(TG_ID, STEAM_ID, "Mad Omsk", "550", "Left 4 Dead 2")]
 
 
+async def test_grace_period_keeps_polling_a_game_that_briefly_vanished(
+    repo: Repo, settings: Settings, monkeypatch
+) -> None:
+    """Steam's own presence sometimes stops reporting gameid for a few
+    minutes while someone keeps playing — found live, cost an achievement a
+    ~19 minute delay. As long as last_active_at is within the grace window
+    and the person isn't reported fully offline, keep polling the last game
+    seen (SPEC 9's follow-up)."""
+    await _linked_user(repo)
+    steam_settings = _steam_settings(settings)
+    await repo.save_steam_presence_state(STEAM_ID, 1, "550", "Left 4 Dead 2", changed=True)
+    # The vanish itself already happened on a prior tick (its own "final"
+    # poll already fired then) — gameid is gone, but last_active_* still
+    # points at the game, fresh.
+    await repo.save_steam_presence_state(STEAM_ID, 1, None, None, changed=True)
+    await repo._conn.execute(
+        "UPDATE steam_presence_state SET updated_at = '2020-01-01T00:00:00+00:00' "
+        "WHERE steam_id = ?",
+        (STEAM_ID,),
+    )
+    await repo._conn.commit()
+
+    async def fake_batch(api_key, steam_ids):
+        # Still no gameid this tick either — same as last stored state, so
+        # this is a steady-state tick, not a fresh change.
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID, persona_name="Mad Omsk", persona_state=1,
+                gameid=None, game_name=None,
+            )
+        }
+
+    monkeypatch.setattr(steam_presence_module, "get_presence_batch", fake_batch)
+    fetcher = FakeFetcher()
+    poller = SteamPresencePoller(steam_settings, repo, fetcher)  # type: ignore[arg-type]
+
+    await poller.tick()
+
+    assert fetcher.calls == [(TG_ID, STEAM_ID, "Mad Omsk", "550", "Left 4 Dead 2")]
+
+
+async def test_grace_period_does_not_apply_once_reported_fully_offline(
+    repo: Repo, settings: Settings, monkeypatch
+) -> None:
+    """persona_state == 0 means Steam itself says they're gone — no benefit
+    of the doubt, unlike a merely-missing gameid."""
+    await _linked_user(repo)
+    steam_settings = _steam_settings(settings)
+    await repo.save_steam_presence_state(STEAM_ID, 1, "550", "Left 4 Dead 2", changed=True)
+    await repo.save_steam_presence_state(STEAM_ID, 0, None, None, changed=True)
+    await repo._conn.execute(
+        "UPDATE steam_presence_state SET updated_at = '2020-01-01T00:00:00+00:00' "
+        "WHERE steam_id = ?",
+        (STEAM_ID,),
+    )
+    await repo._conn.commit()
+
+    async def fake_batch(api_key, steam_ids):
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID, persona_name="Mad Omsk", persona_state=0,
+                gameid=None, game_name=None,
+            )
+        }
+
+    monkeypatch.setattr(steam_presence_module, "get_presence_batch", fake_batch)
+    fetcher = FakeFetcher()
+    poller = SteamPresencePoller(steam_settings, repo, fetcher)  # type: ignore[arg-type]
+
+    await poller.tick()
+
+    assert fetcher.calls == []
+
+
+async def test_grace_period_expires(repo: Repo, settings: Settings, monkeypatch) -> None:
+    await _linked_user(repo)
+    steam_settings = _steam_settings(settings)
+    await repo.save_steam_presence_state(STEAM_ID, 1, "550", "Left 4 Dead 2", changed=True)
+    await repo.save_steam_presence_state(STEAM_ID, 1, None, None, changed=True)
+    await repo._conn.execute(
+        "UPDATE steam_presence_state SET updated_at = '2020-01-01T00:00:00+00:00',"
+        "  last_active_at = '2020-01-01T00:00:00+00:00' WHERE steam_id = ?",
+        (STEAM_ID,),
+    )
+    await repo._conn.commit()
+
+    async def fake_batch(api_key, steam_ids):
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID, persona_name="Mad Omsk", persona_state=1,
+                gameid=None, game_name=None,
+            )
+        }
+
+    monkeypatch.setattr(steam_presence_module, "get_presence_batch", fake_batch)
+    fetcher = FakeFetcher()
+    poller = SteamPresencePoller(steam_settings, repo, fetcher)  # type: ignore[arg-type]
+
+    await poller.tick()
+
+    assert fetcher.calls == []
+
+
 async def test_tick_skips_a_profile_steam_did_not_return(
     repo: Repo, settings: Settings, monkeypatch
 ) -> None:

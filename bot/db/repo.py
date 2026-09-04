@@ -94,6 +94,11 @@ class SteamPollTarget:
     changed_at: str | None
     last_ach_poll_at: str | None
     updated_at: str | None
+    # Sticky through brief presence gaps — see steam_presence_state's own
+    # comment (schema.sql) and poller/steam_presence.py's grace period.
+    last_active_gameid: str | None = None
+    last_active_game_name: str | None = None
+    last_active_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -622,7 +627,8 @@ class Repo:
         all, one shared API key for the whole bot (M-Steam-1)."""
         cursor = await self._conn.execute(
             "SELECT u.tg_id, pl.external_id AS steam_id, p.persona_state, p.gameid,"
-            "       p.game_name, p.changed_at, p.last_ach_poll_at, p.updated_at "
+            "       p.game_name, p.changed_at, p.last_ach_poll_at, p.updated_at,"
+            "       p.last_active_gameid, p.last_active_game_name, p.last_active_at "
             "FROM platform_links pl "
             "JOIN users u ON u.tg_id = pl.tg_id "
             "LEFT JOIN steam_presence_state p ON p.steam_id = pl.external_id "
@@ -638,6 +644,9 @@ class Repo:
                 changed_at=row["changed_at"],
                 last_ach_poll_at=row["last_ach_poll_at"],
                 updated_at=row["updated_at"],
+                last_active_gameid=row["last_active_gameid"],
+                last_active_game_name=row["last_active_game_name"],
+                last_active_at=row["last_active_at"],
             )
             for row in await cursor.fetchall()
         ]
@@ -652,16 +661,43 @@ class Repo:
         changed: bool,
     ) -> None:
         now = utcnow_iso()
+        # last_active_* only moves forward when this tick actually has a
+        # gameid — a tick that finds none (presence gap or a real quit)
+        # leaves it exactly where it was, which is the whole point: it's
+        # what the grace period (poller/steam_presence.py) reads to decide
+        # whether "no gameid right now" still means "keep polling the last
+        # game anyway". On first-ever insert there's no prior tick to fall
+        # back to, so it just starts out matching this one (NULL together
+        # with gameid if this row's very first sighting has no game either).
+        last_active_at = now if gameid is not None else None
         await self._conn.execute(
             "INSERT INTO steam_presence_state "
-            "(steam_id, persona_state, gameid, game_name, changed_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
+            "(steam_id, persona_state, gameid, game_name, changed_at, updated_at,"
+            " last_active_gameid, last_active_game_name, last_active_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(steam_id) DO UPDATE SET "
             "  persona_state = excluded.persona_state, gameid = excluded.gameid,"
             "  game_name = excluded.game_name, updated_at = excluded.updated_at,"
             "  changed_at = CASE WHEN ? THEN excluded.changed_at "
-            "                 ELSE steam_presence_state.changed_at END",
-            (steam_id, persona_state, gameid, game_name, now, now, 1 if changed else 0),
+            "                 ELSE steam_presence_state.changed_at END,"
+            "  last_active_gameid = CASE WHEN excluded.gameid IS NOT NULL"
+            "    THEN excluded.gameid ELSE steam_presence_state.last_active_gameid END,"
+            "  last_active_game_name = CASE WHEN excluded.gameid IS NOT NULL"
+            "    THEN excluded.game_name ELSE steam_presence_state.last_active_game_name END,"
+            "  last_active_at = CASE WHEN excluded.gameid IS NOT NULL"
+            "    THEN excluded.updated_at ELSE steam_presence_state.last_active_at END",
+            (
+                steam_id,
+                persona_state,
+                gameid,
+                game_name,
+                now,
+                now,
+                gameid,
+                game_name,
+                last_active_at,
+                1 if changed else 0,
+            ),
         )
         await self._conn.commit()
 

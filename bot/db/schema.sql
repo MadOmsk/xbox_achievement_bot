@@ -176,13 +176,24 @@ CREATE TABLE IF NOT EXISTS presence_state (
 -- state/title_id) and its own debounce, keyed by steam_id like the Xbox one
 -- is keyed by xuid.
 CREATE TABLE IF NOT EXISTS steam_presence_state (
-    steam_id         TEXT PRIMARY KEY,
-    persona_state    INTEGER,  -- Steam's own enum, 0=offline..6
-    gameid           TEXT,     -- NULL when not in a game
-    game_name        TEXT,     -- gameextrainfo at the moment of the last change
-    changed_at       TEXT,
-    last_ach_poll_at TEXT,
-    updated_at       TEXT
+    steam_id              TEXT PRIMARY KEY,
+    persona_state         INTEGER,  -- Steam's own enum, 0=offline..6
+    gameid                TEXT,     -- NULL when not in a game, right now
+    game_name             TEXT,     -- gameextrainfo at the moment of the last change
+    changed_at            TEXT,
+    last_ach_poll_at      TEXT,
+    updated_at            TEXT,
+    -- Sticky through brief gaps, unlike gameid/game_name above: Steam's own
+    -- presence intermittently stops reporting gameid for a few minutes even
+    -- while someone keeps playing (found live — an achievement sat unseen
+    -- for ~19 minutes because of exactly this). last_active_* remembers the
+    -- last game we actually confirmed them in, and when, so the poller can
+    -- keep checking it through a short gap instead of going idle
+    -- (poller/steam_presence.py's grace period). Never read for /online —
+    -- that still wants the raw, un-extended gameid above.
+    last_active_gameid    TEXT,
+    last_active_game_name TEXT,
+    last_active_at        TEXT
 );
 
 -- Title history cache (for /stats, /compare, /top)

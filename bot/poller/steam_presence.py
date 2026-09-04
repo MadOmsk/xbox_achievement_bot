@@ -28,6 +28,17 @@ IDLE_AFTER_SECONDS = 2 * 3600
 DUE_TOLERANCE_SECONDS = 5  # same reasoning as presence.py's own constant
 BATCH_SIZE = 100  # GetPlayerSummaries' own documented limit per call
 
+# Found live: Steam's own presence (GetPlayerSummaries) sometimes stops
+# reporting gameid for several minutes while someone keeps playing — an
+# achievement sat unseen for ~19 minutes because of exactly this, achievement
+# polling only runs for games the person is currently shown playing (SPEC
+# 5.3's own reasoning: no gameid, no rarity data worth trusting either). As
+# long as we saw them in a game within this window, keep polling that game
+# through the gap rather than going idle until presence recovers on its own.
+# 10 minutes: generous enough for the gaps seen so far, short enough that a
+# genuine quit doesn't keep getting polled long after the fact.
+GRACE_PERIOD_SECONDS = 10 * 60
+
 
 class SteamPresencePoller:
     def __init__(self, settings: Settings, repo: Repo, fetcher: SteamFetcher) -> None:
@@ -86,6 +97,39 @@ class SteamPresencePoller:
             await self._poll_achievements(
                 target, snapshot.persona_name, snapshot.gameid, snapshot.game_name, force=changed
             )
+        elif not changed:
+            # `changed` alone already got a forced poll of target.gameid just
+            # above (the "final" branch) — on the very first tick a game
+            # goes missing, that already covers this exact game. Grace only
+            # needs to pick up steady-state ticks after that, where nothing
+            # "changed" but the gap hasn't closed yet.
+            grace_game = self._grace_game(target, snapshot)
+            if grace_game is not None:
+                gameid, game_name = grace_game
+                # Not "final" and not a fresh in_game reading — an ordinary
+                # continuation of the same session, so it stays on the usual
+                # debounce cadence rather than forcing every tick.
+                await self._poll_achievements(
+                    target, snapshot.persona_name, gameid, game_name, force=False
+                )
+
+    def _grace_game(
+        self, target: SteamPollTarget, snapshot: SteamPresence
+    ) -> tuple[str, str | None] | None:
+        """Bridges a presence gap (GRACE_PERIOD_SECONDS, module docstring):
+        gameid missing right now, but recently confirmed, and the person
+        isn't reported fully offline — most likely still playing, Steam's
+        own presence just hasn't said so this tick."""
+        if snapshot.persona_state == 0:
+            return None  # actually offline — no game to keep polling
+        if target.last_active_gameid is None or target.last_active_at is None:
+            return None
+        last_active = parse_iso(target.last_active_at)
+        if last_active is None:
+            return None
+        if (utcnow() - last_active).total_seconds() > GRACE_PERIOD_SECONDS:
+            return None
+        return target.last_active_gameid, target.last_active_game_name
 
     async def _poll_achievements(
         self,
