@@ -43,9 +43,16 @@ CREATE TABLE IF NOT EXISTS chats (
 );
 
 CREATE TABLE IF NOT EXISTS subscriptions (
-    chat_id    INTEGER NOT NULL REFERENCES chats(chat_id) ON DELETE CASCADE,
-    tg_id      INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL,
+    chat_id     INTEGER NOT NULL REFERENCES chats(chat_id) ON DELETE CASCADE,
+    tg_id       INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+    created_at  TEXT NOT NULL,
+    -- Per (person, chat), not one global value on the person (moved off
+    -- user_settings — same reasoning as 'all'/'rare'/'hidden' documented
+    -- there originally, now scoped down: what counts as worth publishing
+    -- can differ between a close-friends chat and a big public one).
+    -- New subscriptions default to 'all', same as user_settings used to.
+    rarity_mode TEXT NOT NULL DEFAULT 'all'
+                CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
     PRIMARY KEY (chat_id, tg_id)
 );
 
@@ -60,16 +67,14 @@ CREATE TABLE IF NOT EXISTS chat_seen (
 
 CREATE TABLE IF NOT EXISTS user_settings (
     tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-    -- One mode for every platform the person has connected (Xbox modern,
-    -- Xbox 360, Steam) — not a switch per platform (M-Steam-2e, SPEC 1.4).
-    -- 'hidden' turns the whole feed off, on any platform. A platform with
-    -- no rarity_percent at all (currently only Xbox 360) is exempt from
-    -- the rarity check under 'rare' — shown as under 'all' instead, since
-    -- "no data" isn't "too common" (SPEC 5.5, services/achievements.py).
-    -- There used to be a separate show_x360 column here; folded into this
-    -- one when Steam arrived rather than getting a second one of its own.
-    rarity_mode      TEXT    NOT NULL DEFAULT 'all'
-                     CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
+    -- rarity_mode used to live here, one value for every chat a person
+    -- publishes to. Moved to subscriptions.rarity_mode (one per chat, not
+    -- one for all of them) — a chat with close friends and a big public
+    -- one can reasonably want different answers to "what's worth showing".
+    -- Still one mode for every platform though (Xbox modern, Xbox 360,
+    -- Steam — M-Steam-2e, SPEC 1.4): a platform with no rarity_percent at
+    -- all (currently only Xbox 360) is exempt from the rarity check under
+    -- 'rare' rather than getting a switch of its own.
     digest_threshold INTEGER NOT NULL DEFAULT 3,
     muted_title_ids  TEXT    NOT NULL DEFAULT '[]',
     tz_offset_min    INTEGER                       -- minutes from UTC, NULL = global timezone
@@ -79,11 +84,12 @@ CREATE TABLE IF NOT EXISTS user_settings (
 -- explicit per chat (SPEC 5.5, 5.7) — briefly shared via app_settings with a
 -- NULL-means-"follow the global value" fallback, reverted once real multi-
 -- chat use showed chats want genuinely different values, not one shared
--- knob that moves every chat at once on every edit. No chat-level rarity
--- mode column either — that used to gate publication alongside the user's
--- own choice (an AND of the two), dropped as redundant: the user's own
--- rarity_mode already decides this, the chat only supplies the threshold
--- number for what "rare" means when someone picks it.
+-- knob that moves every chat at once on every edit. No *admin-controlled*
+-- rarity mode column here — that used to gate publication alongside the
+-- person's own choice (an AND of the two), dropped as redundant. The
+-- person's own choice does live per chat, just not here: `subscriptions.
+-- rarity_mode` (SPEC 9, M-Steam-2e's follow-up) — this table only supplies
+-- the threshold number for what "rare" means once someone picks it.
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id                INTEGER PRIMARY KEY REFERENCES chats(chat_id) ON DELETE CASCADE,
     min_gamerscore          INTEGER NOT NULL DEFAULT 0,

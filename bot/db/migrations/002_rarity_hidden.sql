@@ -1,33 +1,12 @@
--- Adds a third state to user_settings.rarity_mode: 'hidden' — originally the
--- One/Series/PC counterpart of the Xbox 360 show/hide switch, instead of a
--- plain all/rare toggle. SQLite has no ALTER on a CHECK constraint, so the
--- table is rebuilt.
+-- Originally: adds a third state to user_settings.rarity_mode: 'hidden'.
 --
--- show_x360 itself is NOT part of this rebuild (edited here after migration
--- 015 removed it, SPEC 9 M-Steam-2e) — schema.sql no longer creates that
--- column for a brand-new database, so a plain rebuild-and-swap referencing
--- it here would collide on any fresh database the moment this migration
--- runs (same reasoning as migration 008's own fix earlier). Production
--- already applied this migration long before show_x360 existed to remove,
--- so editing it now only changes what a fresh install sees.
-
-PRAGMA foreign_keys = OFF;
-
-CREATE TABLE user_settings_new (
-    tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-    rarity_mode      TEXT    NOT NULL DEFAULT 'all'
-                     CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
-    digest_threshold INTEGER NOT NULL DEFAULT 3,
-    muted_title_ids  TEXT    NOT NULL DEFAULT '[]',
-    tz_offset_min    INTEGER
-);
-
-INSERT INTO user_settings_new
-    (tg_id, rarity_mode, digest_threshold, muted_title_ids, tz_offset_min)
-SELECT tg_id, rarity_mode, digest_threshold, muted_title_ids, tz_offset_min
-FROM user_settings;
-
-DROP TABLE user_settings;
-ALTER TABLE user_settings_new RENAME TO user_settings;
-
-PRAGMA foreign_keys = ON;
+-- Now a no-op for a fresh database (edited here after migration 016 moved
+-- rarity_mode off user_settings entirely, onto subscriptions — SPEC 9,
+-- M-Steam-2e's follow-up): schema.sql no longer creates a rarity_mode
+-- column on user_settings at all, so this migration's original rebuild
+-- would collide the moment it runs on a brand-new database, the same class
+-- of problem migration 008's and migration 002's own earlier fix (for
+-- show_x360) already ran into. Production applied the *original* version
+-- of this migration long before rarity_mode ever left user_settings, so
+-- editing the file now only changes what a fresh install sees — it never
+-- replays there.

@@ -7,21 +7,28 @@
 -- before 3.35, and this project's own sqlite3 build predates relying on it
 -- (same rebuild pattern as migration 002, which added show_x360 the same
 -- way it's removed here).
+--
+-- rarity_mode itself is NOT part of this rebuild (edited here after
+-- migration 016 moved it off user_settings entirely, onto subscriptions —
+-- SPEC 9, M-Steam-2e's follow-up): schema.sql no longer creates that
+-- column on a brand-new database, so keeping it here would collide the
+-- moment this migration runs on a fresh install (same reasoning as this
+-- file's own show_x360 removal, and migration 002's matching fix).
+-- Production applied this migration's *original* form (rarity_mode kept,
+-- show_x360 dropped) before 016 existed, so editing it now only changes
+-- what a fresh install sees.
 
 PRAGMA foreign_keys = OFF;
 
 CREATE TABLE user_settings_new (
     tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-    rarity_mode      TEXT    NOT NULL DEFAULT 'all'
-                     CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
     digest_threshold INTEGER NOT NULL DEFAULT 3,
     muted_title_ids  TEXT    NOT NULL DEFAULT '[]',
     tz_offset_min    INTEGER
 );
 
-INSERT INTO user_settings_new
-    (tg_id, rarity_mode, digest_threshold, muted_title_ids, tz_offset_min)
-SELECT tg_id, rarity_mode, digest_threshold, muted_title_ids, tz_offset_min
+INSERT INTO user_settings_new (tg_id, digest_threshold, muted_title_ids, tz_offset_min)
+SELECT tg_id, digest_threshold, muted_title_ids, tz_offset_min
 FROM user_settings;
 
 DROP TABLE user_settings;

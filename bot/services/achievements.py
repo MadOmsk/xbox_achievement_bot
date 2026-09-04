@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from html import escape as html_escape
 
-from bot.db.repo import AchievementRow, ChatTarget, UserSettings
+from bot.db.repo import AchievementRow, ChatTarget
 from bot.util import thousands
 
 DIAMOND_MAX_PERCENT = 5.0
@@ -36,29 +36,32 @@ _NO_RARITY_DATA_PLATFORMS = {"x360"}
 
 def passes_filters(
     achievement: AchievementRow,
-    user: UserSettings,
     chat: ChatTarget,
     rare_threshold: float,
 ) -> bool:
-    """The user's own rarity choice, plus the chat's own spam guards.
+    """The person's own rarity choice for *this* chat, plus the chat's own
+    spam guards.
 
-    Rarity mode (all/rare/hidden) is the user's call alone — the chat only
-    supplies the number that decides what "rare" means for it (SPEC 5.5); a
-    chat-level rarity toggle used to gate this too, dropped once it turned
-    out redundant with the user's own choice and just added a second switch
-    people had to find and agree on.
+    Rarity mode (all/rare/hidden) used to be one value for every chat a
+    person publishes to (`user_settings.rarity_mode`) — moved to
+    `subscriptions.rarity_mode`, one per chat (SPEC 9, M-Steam-2e's
+    follow-up): a close-friends chat and a big public one can reasonably
+    want different answers to "what's worth showing". A chat-*admin*-
+    controlled rarity toggle used to exist too, gating this alongside the
+    person's own choice — dropped once it turned out redundant, a second
+    switch people had to find and agree on for no real benefit.
 
     One `rarity_mode`, not one per platform (SPEC 9, M-Steam-2e) — there
     used to be a separate `show_x360` switch here, folded into this single
     check when Steam arrived rather than growing a second platform-specific
     toggle to match it.
     """
-    if user.rarity_mode == "hidden":
-        # Every platform's feed off entirely.
+    if chat.rarity_mode == "hidden":
+        # Every platform's feed off entirely, for this chat.
         return False
 
     if achievement.platform not in _NO_RARITY_DATA_PLATFORMS and not _passes_rarity(
-        achievement, user.rarity_mode, rare_threshold
+        achievement, chat.rarity_mode, rare_threshold
     ):
         return False
 

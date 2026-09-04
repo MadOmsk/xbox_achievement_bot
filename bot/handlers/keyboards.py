@@ -62,9 +62,11 @@ def format_digest(threshold: int) -> str:
     return "никогда" if threshold >= DIGEST_NEVER else f"от {threshold} ачивок"
 
 
-# One mode governs every connected platform at once (SPEC 9, M-Steam-2e) —
-# show everything, show only the rare ones, or nothing. A click cycles to
-# the next one rather than opening a submenu — one tap, not two, for a
+# One mode governs every connected platform at once within a given chat
+# (SPEC 9, M-Steam-2e and its follow-up — per chat now, not one shared
+# value for all of them, panel.py's "Мои чаты" chat card) — show
+# everything, show only the rare ones, or nothing. A click cycles to the
+# next one rather than opening a submenu — one tap, not two, for a
 # three-way toggle. Used to have a separate Xbox 360 show/hide switch next
 # to this one; folded in here instead of growing a second platform-specific
 # toggle when Steam arrived (services/achievements.py::passes_filters).
@@ -102,7 +104,6 @@ def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMar
 
 def panel_keyboard(
     tz_offset_min: int | None,
-    rarity_mode: str = "all",
     digest_threshold: int = 3,
     *,
     connected: bool = True,
@@ -121,12 +122,6 @@ def panel_keyboard(
     if needs_reconnect:
         rows.append([InlineKeyboardButton(text="🔄 Подключить заново", callback_data="relogin")])
     rows += [
-        [
-            InlineKeyboardButton(
-                text=f"Ачивки: {format_rarity(rarity_mode)}",
-                callback_data="panel:rarity",
-            )
-        ],
         [
             InlineKeyboardButton(
                 text=f"Сводка: {format_digest(digest_threshold)} ▸",

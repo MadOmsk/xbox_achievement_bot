@@ -72,7 +72,7 @@ class Publisher:
             allowed = [
                 item
                 for item in achievements
-                if passes_filters(item, user_settings, chat, chat.rare_threshold_percent)
+                if passes_filters(item, chat, chat.rare_threshold_percent)
             ]
             if not allowed:
                 continue

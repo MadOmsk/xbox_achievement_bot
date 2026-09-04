@@ -21,6 +21,7 @@ from bot.handlers.keyboards import (
     digest_keyboard,
     disconnect_prompt_keyboard,
     format_offset,
+    format_rarity,
     next_rarity_mode,
     panel_keyboard,
     timezone_keyboard,
@@ -121,19 +122,6 @@ async def panel_sync(
     )
     if isinstance(callback.message, Message):
         await callback.message.answer(summary)
-
-
-@router.callback_query(F.data == "panel:rarity")
-async def panel_rarity_cycle(callback: CallbackQuery, repo: Repo) -> None:
-    """One mode for every connected platform (SPEC 9, M-Steam-2e; used to be
-    paired with a separate Xbox 360 show/hide switch, folded into this one
-    instead of growing a second per-platform toggle) — the threshold itself
-    stays the admin's (SPEC 1.4). One tap advances to the next mode."""
-    settings_row = await repo.get_user_settings(callback.from_user.id)
-    current = settings_row.rarity_mode if settings_row else "all"
-    mode = next_rarity_mode(current)
-    await repo.update_user_settings(callback.from_user.id, rarity_mode=mode)
-    await _redraw(callback, repo)
 
 
 @router.callback_query(F.data == "panel:digest")
@@ -249,6 +237,16 @@ async def _chat_card(
     builder = InlineKeyboardBuilder()
     if chat.is_subscribed:
         text = f"💬 {title}\n\nПубликация: ✅ включена"
+        # Per-chat, not one shared value any more (SPEC 9, M-Steam-2e's
+        # follow-up) — only shown while actually publishing here, same as
+        # min_gamerscore/muted_title_ids having nothing to apply to
+        # otherwise.
+        builder.row(
+            InlineKeyboardButton(
+                text=f"Ачивки: {format_rarity(chat.rarity_mode or 'all')}",
+                callback_data=f"panel:chatrarity:{chat_id}",
+            )
+        )
         builder.row(
             InlineKeyboardButton(text="Отписаться", callback_data=f"panel:chatunsub:{chat_id}")
         )
@@ -280,6 +278,21 @@ async def _redraw_chat_card(callback: CallbackQuery, repo: Repo, chat_id: int) -
 async def panel_chat_card(callback: CallbackQuery, repo: Repo) -> None:
     assert callback.data is not None
     chat_id = int(callback.data.rsplit(":", 1)[1])
+    await _redraw_chat_card(callback, repo, chat_id)
+
+
+@router.callback_query(F.data.startswith("panel:chatrarity:"))
+async def panel_chat_rarity_cycle(callback: CallbackQuery, repo: Repo) -> None:
+    """One tap advances this chat's mode to the next one (SPEC 9, M-Steam-2e's
+    follow-up — moved off the main panel, per chat now)."""
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_user_chat(repo, callback.from_user.id, chat_id)
+    if chat is None or not chat.is_subscribed:
+        await callback.answer()
+        return
+    mode = next_rarity_mode(chat.rarity_mode or "all")
+    await repo.update_subscription_rarity_mode(chat_id, callback.from_user.id, mode)
     await _redraw_chat_card(callback, repo, chat_id)
 
 
@@ -376,7 +389,6 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     tz_offset = settings_row.tz_offset_min if settings_row else None
     keyboard = panel_keyboard(
         tz_offset,
-        settings_row.rarity_mode if settings_row else "all",
         settings_row.digest_threshold if settings_row else 3,
         connected=connected,
         needs_reconnect=needs_reconnect,

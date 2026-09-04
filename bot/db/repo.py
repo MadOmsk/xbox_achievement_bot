@@ -62,7 +62,6 @@ class TokenRecord:
 @dataclass(slots=True)
 class UserSettings:
     tg_id: int
-    rarity_mode: str
     digest_threshold: int
     tz_offset_min: int | None
 
@@ -123,6 +122,11 @@ class ChatTarget:
     rare_threshold_percent: float
     daily_summary_time: str
     tz_offset_min: int
+    # The person's own choice for *this* chat (SPEC 9, M-Steam-2e's
+    # follow-up — moved off user_settings, one value for every chat, onto
+    # subscriptions, one value per chat). Defaults to 'all' only for call
+    # sites (admin_chats) that have no one specific subscriber in mind.
+    rarity_mode: str = "all"
     # Filled in by the admin panel only; the publisher never looks at them.
     is_active: bool = True
     daily_summary: bool = True
@@ -149,6 +153,7 @@ class UserChatRow:
     chat_id: int
     title: str | None
     is_subscribed: bool
+    rarity_mode: str | None  # only meaningful while subscribed; None otherwise
 
 
 @dataclass(slots=True)
@@ -477,7 +482,7 @@ class Repo:
         return _as_user_settings(row) if row else None
 
     async def update_user_settings(self, tg_id: int, **fields: Any) -> None:
-        allowed = {"rarity_mode", "digest_threshold", "tz_offset_min"}
+        allowed = {"digest_threshold", "tz_offset_min"}
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"unknown user_settings fields: {sorted(unknown)}")
@@ -874,12 +879,14 @@ class Repo:
         """Every chat this person has ever touched (SPEC 6.2's "Мои чаты") —
         subscribed at some point, or just seen writing there, same membership
         `/online` uses (SPEC 6.3). A chat the bot got kicked from is left out:
-        nothing to manage there any more."""
+        nothing to manage there any more. `rarity_mode` comes along too
+        (SPEC 9, M-Steam-2e's follow-up — it lives per subscription now),
+        NULL when not currently subscribed."""
         cursor = await self._conn.execute(
-            "SELECT c.chat_id, c.title,"
-            "       EXISTS(SELECT 1 FROM subscriptions s"
-            "              WHERE s.chat_id = c.chat_id AND s.tg_id = ?) AS subscribed "
-            "FROM chats c WHERE c.is_active = 1 AND c.chat_id IN ("
+            "SELECT c.chat_id, c.title, s.rarity_mode "
+            "FROM chats c "
+            "LEFT JOIN subscriptions s ON s.chat_id = c.chat_id AND s.tg_id = ? "
+            "WHERE c.is_active = 1 AND c.chat_id IN ("
             "  SELECT chat_id FROM subscriptions WHERE tg_id = ?"
             "  UNION "
             "  SELECT chat_id FROM chat_seen WHERE tg_id = ?"
@@ -888,10 +895,25 @@ class Repo:
         )
         return [
             UserChatRow(
-                chat_id=row["chat_id"], title=row["title"], is_subscribed=bool(row["subscribed"])
+                chat_id=row["chat_id"],
+                title=row["title"],
+                is_subscribed=row["rarity_mode"] is not None,
+                rarity_mode=row["rarity_mode"],
             )
             for row in await cursor.fetchall()
         ]
+
+    async def update_subscription_rarity_mode(
+        self, chat_id: int, tg_id: int, rarity_mode: str
+    ) -> None:
+        """The person's own rarity choice for one specific chat (SPEC 9,
+        M-Steam-2e's follow-up — panel.py's "Мои чаты" card, not the main
+        panel screen any more)."""
+        await self._conn.execute(
+            "UPDATE subscriptions SET rarity_mode = ? WHERE chat_id = ? AND tg_id = ?",
+            (rarity_mode, chat_id, tg_id),
+        )
+        await self._conn.commit()
 
     async def forget_chat_membership(self, chat_id: int, tg_id: int) -> None:
         """ "Delete" a chat from a person's own list (SPEC 6.2) — resets him to
@@ -915,7 +937,8 @@ class Repo:
     async def publication_targets(self, tg_id: int) -> list[ChatTarget]:
         cursor = await self._conn.execute(
             "SELECT c.chat_id, c.title, s.min_gamerscore, s.muted_title_ids,"
-            "       s.rare_threshold_percent, s.daily_summary_time, s.tz_offset_min "
+            "       s.rare_threshold_percent, s.daily_summary_time, s.tz_offset_min,"
+            "       sub.rarity_mode "
             "FROM subscriptions sub "
             "JOIN chats c ON c.chat_id = sub.chat_id "
             "JOIN chat_settings s ON s.chat_id = c.chat_id "
@@ -931,6 +954,7 @@ class Repo:
                 rare_threshold_percent=row["rare_threshold_percent"],
                 daily_summary_time=row["daily_summary_time"],
                 tz_offset_min=row["tz_offset_min"],
+                rarity_mode=row["rarity_mode"],
             )
             for row in await cursor.fetchall()
         ]
@@ -1694,7 +1718,6 @@ def _as_token(row: aiosqlite.Row) -> TokenRecord:
 def _as_user_settings(row: aiosqlite.Row) -> UserSettings:
     return UserSettings(
         tg_id=row["tg_id"],
-        rarity_mode=row["rarity_mode"],
         digest_threshold=row["digest_threshold"],
         tz_offset_min=row["tz_offset_min"],
     )
