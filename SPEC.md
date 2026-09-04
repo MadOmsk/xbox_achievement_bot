@@ -306,19 +306,26 @@ CREATE TABLE chat_settings (
     tz_offset_min           INTEGER NOT NULL DEFAULT 180
 );
 
--- Глобальные настройки, которые крутит админ
+-- Глобальные настройки, которые крутит админ — не порог редкости и не время
+-- итога дня, оба переехали в chat_settings (см. выше)
 CREATE TABLE app_settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
     updated_by INTEGER,
     updated_at TEXT NOT NULL
 );
--- daily_summary_time      по умолчанию '23:00'
--- timezone                по умолчанию из TZ в .env; применяется к итогу дня
---                         и к тем, у кого не выбран личный часовой пояс
+-- summary_top_limit        по умолчанию '15', 0 = без ограничения (6.4)
+-- stats_games_limit        по умолчанию '15', 0 = без ограничения (6.4)
+-- hltb_results_limit       по умолчанию '20' (6.6)
+-- hltb_page_size           по умолчанию '5' (6.6)
 
--- Дедупликация: что уже видели
+-- Дедупликация: что уже видели. Ключ — tg_id, не xuid (M-Steam-2, раздел
+-- 9): у человека скоро будет несколько external_id (Xbox xuid, Steam
+-- SteamID64), а сумма ачивок по всем платформам считается по одному
+-- стабильному tg_id. xuid остаётся обычной колонкой — платформенный
+-- external_id строки, просто больше не то, что определяет, чья она.
 CREATE TABLE seen_achievements (
+    tg_id           INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
     xuid            TEXT NOT NULL,
     title_id        TEXT NOT NULL,
     achievement_id  TEXT NOT NULL,
@@ -327,16 +334,17 @@ CREATE TABLE seen_achievements (
     icon_url        TEXT,
     unlocked_at     TEXT,               -- UTC
     gamerscore      INTEGER,
-    rarity_percent  REAL,               -- NULL у Xbox 360
+    rarity_percent  REAL,               -- NULL у Xbox 360 и Steam
     platform        TEXT NOT NULL DEFAULT 'modern'
-                    CHECK (platform IN ('modern', 'x360')),
+                    CHECK (platform IN ('modern', 'x360', 'steam')),
     is_backfill     INTEGER NOT NULL DEFAULT 0,  -- пришло бэкфилом, публикации не подлежит
-    is_secret       INTEGER NOT NULL DEFAULT 0,  -- Xbox isSecret; name/description настоящие
-                                                  -- в любом случае, спойлерит их бот (7.1)
+    is_secret       INTEGER NOT NULL DEFAULT 0,  -- Xbox isSecret / Steam hidden; name/description
+                                                  -- настоящие в любом случае, спойлерит их бот (7.1)
     created_at      TEXT NOT NULL,
-    PRIMARY KEY (xuid, title_id, achievement_id)
+    PRIMARY KEY (tg_id, platform, title_id, achievement_id)
 );
 CREATE INDEX idx_seen_unlocked ON seen_achievements(xuid, unlocked_at DESC);
+CREATE INDEX idx_seen_tg_unlocked ON seen_achievements(tg_id, unlocked_at DESC);
 
 -- Что и куда реально опубликовано. Отдельно от seen_achievements: юзер может быть
 -- подписан в двух чатах, и падение публикации в один не должно терять ачивку в другом.
@@ -1537,7 +1545,8 @@ Kill 100 enemies with the plasma coil.
 - **Приватность.** Даже свои данные могут прийти пустыми (ребёнок под
   родительским контролем, закрытый профиль). Обрабатываем как «нет данных».
 - **Часовые пояса.** Всё в базе — UTC. Конвертация только при выводе, по
-  `app_settings.timezone`.
+  `chat_settings.tz_offset_min` (итог дня) или `user_settings.tz_offset_min`
+  (личный, где ещё имеет смысл) — общего глобального пояса больше нет (5.7).
 - **Игры без ачивок** и ачивки с нулевым гeймерскором — валидные случаи.
 - **Telegram rate limits** — очередь, 5.5.
 - **Бота выкинули из чата** — 403, гасим `chats.is_active`, а не долбимся вечно.
@@ -1625,18 +1634,77 @@ display_name, linked_at)`, не трогает `users.xuid`: один челов
 авторизации — оба вызова реально достучались до Steam. На боевом сервере
 ключа пока нет — деплой без явного разрешения не идёт, как и договорено.
 
-**M-Steam-2 (не спроектировано). Опрос и публикация ачивок Steam.** Требует:
-клиент на `GetOwnedGames`/`GetPlayerAchievements`/`GetSchemaForGame`/
-`GetGlobalAchievementPercentagesForApp`, свою таблицу под ачивки Steam (не
-`seen_achievements` — у Steam нет гeймерскора вообще, только факт
-разблокировки, и `achievement_id` — строковый API-name, не число), свой
-поллер по образу `poller/presence.py` + `poller/fetcher.py`
-(`GetPlayerSummaries` даёt gameid для presence, дальше тот же цикл).
-Показ в интерфейсе по `/stats`/`/online`/`/recent`/`/summary` уже решён (не
-здесь — в TODO.md, до переноса сюда, раз ещё не реализовано): не суммировать
-несравнимое между платформами, секциями внутри тех же команд, без отдельных
-команд на каждую платформу. Не начинать, пока M-Steam-1 не проверен на
-живом ключе.
+**M-Steam-2. Опрос и публикация ачивок Steam.** M-Steam-1 проверен на живом
+ключе, начат. Разбит на подшаги — каждый оставляет проект рабочим:
+
+**M-Steam-2a (сделано). `seen_achievements` теперь ключ по `tg_id`, не по
+`xuid`.** Пока это чистая подготовка схемы — ничего Steam ещё не пишет.
+Причина: новое решение по `/stats`/`/summary` (ниже) суммирует ачивки
+человека **по всем платформам сразу**, а у одного человека скоро будет
+несколько разных `external_id` (Xbox `xuid`, Steam SteamID64) — считать
+такую сумму по `xuid` невозможно, нужен один стабильный ключ на человека.
+`xuid` остаётся обычной колонкой (не частью ключа) — по-прежнему
+платформенный `external_id` конкретной строки, просто больше не то, что
+определяет, чья это строка. Первичный ключ —
+`(tg_id, platform, title_id, achievement_id)`. `platform` CHECK расширен на
+`'steam'` этой же миграцией (011) — не нужно трогать схему ещё раз, когда
+дойдём до записи. `Repo.insert_new_achievements()` резолвит `tg_id` из
+`xuid` через `get_user_by_xuid()` — все существующие (Xbox-only) вызовы не
+меняются; будущий Steam-вызов должен будет резолвить свой `tg_id` иначе
+(через `platform_links`), это уже другой код пути, не сегодняшний.
+
+**M-Steam-2b (не начато). Клиент и парсинг ачивок Steam.**
+`services/steam/client.py` — три новых вызова: `GetPlayerAchievements`
+(`l=russian`, отдаёт готовые локализованные `name`/`description`,
+`achieved`, `unlocktime` — контракт проще, чем у Xbox, отдельного вызова на
+локализацию не нужно), `GetSchemaForGame` (иконки `icon`/`icongray` и
+`hidden` — steam-аналог `isSecret`, ложится прямо на готовый механизм
+спойлеров, 7.1; кэшировать по `appid` навсегда, как `hltb_cache`, — схема
+игры не меняется от опроса к опросу и не зависит от того, чей это
+запрос), `GetGlobalAchievementPercentagesForApp` (редкость, без ключа
+вообще, тоже кэшируемо, но должна периодически обновляться — в отличие от
+схемы, реальный процент меняется со временем). Три ответа соединяются по
+`apiname`/`name` (один и тот же идентификатор, разное имя поля).
+Проверено вживую (реальный привязанный аккаунт, read-only): все три формы
+подтверждены на «Left 4 Dead 2» — 101 ачивка, поля ровно те, что нужны.
+
+**M-Steam-2c (не начато). Presence и поллер.** `GetPlayerSummaries` уже
+используется в M-Steam-1 для профиля — та же ручка отдаёт `personastate`
+(онлайн/офлайн) и `gameid`/`gameextrainfo` (сейчас играет, только пока игра
+реально запущена — не «недавно играл»), причём **батчем до 100 SteamID за
+один вызов**, в отличие от одного Xbox-аккаунта за раз. Своя таблица
+`steam_presence_state` (не переиспользуем Xbox-специфичный
+`presence_state` — разная форма данных, разный debounce), свой
+`poller/steam_presence.py` + `poller/steam_fetcher.py` по образу
+`presence.py`/`fetcher.py`: увидели `gameid`, подождали debounce, опросили
+ачивки этой игры, дедуп через `seen_achievements` (уже готов, 2a),
+публикация — тем же `Publisher`, он уже работает с обобщённым
+`AchievementRow` и ничего не знает про Xbox конкретно.
+
+**M-Steam-2d (не начато). Бэкфил при привязке.** Тем же принципом, что и у
+Xbox (5.6) — при `/connect_steam` тянем всё уже разблокированное как
+`is_backfill=1`, ничего не публикуя, иначе первая же игра с сотней ачивок
+выльется в чат разом. Дороже, чем у Xbox: нет одного вызова на всю
+библиотеку, нужен проход по каждой игре из `GetOwnedGames` с
+`playtime_forever > 0` — потенциально много вызовов на первую привязку,
+фоновой задачей с ограничением одновременных, как у Xbox.
+
+**M-Steam-2e (не начато). UI: `/stats`, `/summary`, `/online`, панель.**
+Решено (TODO.md, раздел «мысль про другие платформы», не сюда до
+реализации): счётчик ачивок в `/stats`/`/summary` — **один, суммой по всем
+платформам** (3 на Xbox + 5 в Steam → «8 ачивок»), гeймерскор — только
+Xbox, для справки, ни в какую сумму не входит (у Steam очков нет вообще).
+Ники платформ — отдельными строками в `/stats`, без своих счётчиков рядом.
+`/summary` сортирует лидерборд по той же сумме. `/online` — если человек
+активен на двух платформах одновременно, берём того, чей presence
+обновлялся позже, а не фиксированный приоритет платформы. `/recent` без
+изменений — общая лента уже сейчас смешивает всё нормально. Панель —
+кнопка-тумблер на каждую подключённую платформу тем же паттерном, что
+«One/Series/PC» (любые/только редкие/скрыто); иконка — цветной кружок
+(🟢 Xbox, ⚫ Steam, 🔵 PlayStation).
+
+Между подшагами можно останавливаться и деплоить — 2a уже в проде сам по
+себе ничего не меняет для пользователя, просто готовит почву.
 
 ---
 

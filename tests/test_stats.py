@@ -24,6 +24,13 @@ def row(achievement_id: str, unlocked_at: str | None, score: int = 10) -> Achiev
     )
 
 
+async def _link(repo: Repo, tg_id: int, xuid: str) -> None:
+    """insert_new_achievements now resolves tg_id from xuid (SPEC 9,
+    M-Steam-2) — a row needs a real linked user behind its xuid."""
+    await repo.ensure_user(tg_id, f"user{tg_id}")
+    await repo.link_xbox_account(tg_id, xuid, f"Player{tg_id}", 0)
+
+
 def test_today_is_a_rolling_24_hours_not_a_calendar_day() -> None:
     """No timezone parameter on purpose: everyone's "today" is the same 24
     hours, unlike a calendar day (SPEC 5.9, matching the summary's window)."""
@@ -43,6 +50,7 @@ def test_month_is_a_rolling_30_days_not_a_calendar_month() -> None:
 
 async def test_counters_include_backfilled_rows(repo: Repo) -> None:
     """is_backfill means "do not publish", not "did not happen" (SPEC 5.9)."""
+    await _link(repo, 1, XUID)
     now = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
     await repo.insert_new_achievements(
         XUID,
@@ -73,6 +81,7 @@ async def test_counters_include_backfilled_rows(repo: Repo) -> None:
 async def test_counters_today_crosses_midnight_correctly(repo: Repo) -> None:
     """23 hours ago is still "today" even though it was yesterday on the
     calendar — and 25 hours ago is not, even on the same calendar day."""
+    await _link(repo, 1, XUID)
     now = datetime(2026, 9, 2, 1, 0, tzinfo=UTC)
     await repo.insert_new_achievements(
         XUID,
@@ -90,6 +99,8 @@ async def test_counters_today_crosses_midnight_correctly(repo: Repo) -> None:
 
 
 async def test_counts_by_xuid_covers_everyone_in_one_query(repo: Repo) -> None:
+    await _link(repo, 1, XUID)
+    await _link(repo, 2, "other")
     await repo.insert_new_achievements(
         XUID, [row("a", "2026-09-02T09:00:00+00:00")], is_backfill=False
     )
@@ -106,6 +117,7 @@ async def test_counts_by_xuid_covers_everyone_in_one_query(repo: Repo) -> None:
 async def test_recent_achievements_orders_newest_first_and_respects_limit(
     repo: Repo,
 ) -> None:
+    await _link(repo, 1, XUID)
     await repo.insert_new_achievements(
         XUID,
         [
@@ -120,3 +132,14 @@ async def test_recent_achievements_orders_newest_first_and_respects_limit(
     recent = await repo.recent_achievements(XUID, limit=2)
 
     assert [item.achievement_id for item in recent] == ["third", "second"]
+
+
+async def test_insert_for_an_unlinked_xuid_is_dropped_not_crashed(repo: Repo) -> None:
+    """No `users` row has this xuid at all — insert_new_achievements resolves
+    tg_id from it (SPEC 9, M-Steam-2) and must not crash when that lookup
+    comes up empty; it just drops the rows (should never happen in practice,
+    an xuid always comes from a connected user)."""
+    new_rows = await repo.insert_new_achievements(
+        "no-such-xuid", [row("a", "2026-09-02T09:00:00+00:00")], is_backfill=False
+    )
+    assert new_rows == []

@@ -100,8 +100,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TEXT NOT NULL
 );
 
--- Deduplication: what we have already seen
+-- Deduplication: what we have already seen. Keyed by tg_id, not by
+-- xuid/external_id (M-Steam-2, TODO.md and SPEC 9): a person will soon have
+-- achievements from more than one platform, each with its own external_id
+-- (Xbox xuid, Steam SteamID64) — summing "how many across every platform"
+-- for one person needs one stable per-person key, and tg_id is the only one
+-- that never changes per platform. `xuid` stays as a plain column (not part
+-- of the key) — still the platform-specific external_id, just no longer
+-- what identifies whose row this is.
 CREATE TABLE IF NOT EXISTS seen_achievements (
+    tg_id           INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
     xuid            TEXT NOT NULL,
     title_id        TEXT NOT NULL,
     achievement_id  TEXT NOT NULL,
@@ -110,16 +118,17 @@ CREATE TABLE IF NOT EXISTS seen_achievements (
     icon_url        TEXT,
     unlocked_at     TEXT,               -- UTC
     gamerscore      INTEGER,
-    rarity_percent  REAL,               -- NULL on Xbox 360
+    rarity_percent  REAL,               -- NULL on Xbox 360 and Steam
     platform        TEXT NOT NULL DEFAULT 'modern'
-                    CHECK (platform IN ('modern', 'x360')),
+                    CHECK (platform IN ('modern', 'x360', 'steam')),
     is_backfill     INTEGER NOT NULL DEFAULT 0,  -- arrived via backfill, never published
     is_secret       INTEGER NOT NULL DEFAULT 0,  -- Xbox's own isSecret; name/description are
                                                   -- real either way, we're the ones who spoiler it
     created_at      TEXT NOT NULL,
-    PRIMARY KEY (xuid, title_id, achievement_id)
+    PRIMARY KEY (tg_id, platform, title_id, achievement_id)
 );
 CREATE INDEX IF NOT EXISTS idx_seen_unlocked ON seen_achievements(xuid, unlocked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_seen_tg_unlocked ON seen_achievements(tg_id, unlocked_at DESC);
 
 -- What was actually published where. Separate from seen_achievements: a user can be
 -- subscribed in two chats, and a failure in one must not lose the achievement in the other.

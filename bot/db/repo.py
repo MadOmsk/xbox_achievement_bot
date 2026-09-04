@@ -578,18 +578,36 @@ class Repo:
     ) -> list[AchievementRow]:
         """Insert what we have not seen and report back only the new rows.
 
-        The primary key (xuid, title_id, achievement_id) is the deduplication:
-        INSERT OR IGNORE tells us which rows were actually new.
+        The primary key (tg_id, platform, title_id, achievement_id) is the
+        deduplication: INSERT OR IGNORE tells us which rows were actually
+        new. tg_id, not xuid, is what identifies whose row this is (SPEC
+        9, M-Steam-2) — resolved here from xuid so every existing (Xbox-
+        only) caller keeps working unchanged; a future Steam call site
+        would resolve its own tg_id from platform_links instead and this
+        method would need a platform-aware variant.
         """
+        if not achievements:
+            return []
+        owner = await self.get_user_by_xuid(xuid)
+        if owner is None:  # defensive — an xuid always comes from a connected user
+            log.warning(
+                "insert_new_achievements: no user for xuid=%s, dropped %d rows",
+                xuid,
+                len(achievements),
+            )
+            return []
+        tg_id = owner.tg_id
+
         new_rows: list[AchievementRow] = []
         now = utcnow_iso()
         for item in achievements:
             cursor = await self._conn.execute(
                 "INSERT OR IGNORE INTO seen_achievements "
-                "(xuid, title_id, achievement_id, name, description, icon_url, unlocked_at,"
+                "(tg_id, xuid, title_id, achievement_id, name, description, icon_url, unlocked_at,"
                 " gamerscore, rarity_percent, platform, is_backfill, is_secret, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
+                    tg_id,
                     xuid,
                     item.title_id,
                     item.achievement_id,
