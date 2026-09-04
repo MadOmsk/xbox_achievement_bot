@@ -398,8 +398,9 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         "",
         f"Вход Xbox:   {login}",
     ]
-    # Only when linked — this step doesn't poll or publish Steam achievements
-    # yet (M-Steam-1, TODO.md), so there's nothing else Steam-related to show.
+    # "Сегодня"/"За месяц" below already sum Steam achievements in too
+    # (SPEC 9, M-Steam-2e) — this line is just the persona name, no counter
+    # of its own next to it, same as /stats' per-platform lines.
     if steam_link is not None:
         lines.append(f"Вход Steam:  {steam_link.display_name}")
     lines += [
