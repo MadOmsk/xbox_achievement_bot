@@ -1,9 +1,5 @@
-"""`/connect_steam`, `/disconnect_steam` (M-Steam-1, TODO.md).
-
-Account linking only — no achievement polling, no /stats section, nothing
-published yet. Deliberately the smallest working slice: a person can link
-and unlink a Steam profile, the bot resolves and remembers it, and that is
-the whole of this step.
+"""`/connect_steam`, `/disconnect_steam` (M-Steam-1, TODO.md; backfill —
+SPEC 9, M-Steam-2d).
 
 Private chat only, like /connect_xbox and /panel — this is personal, not a group
 setting (SPEC 6.3's "настройки в общий чат не попадают никогда" applies the
@@ -17,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -26,7 +23,10 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from bot.config import Settings
 from bot.db.repo import Repo
 from bot.handlers.keyboards import deep_link_keyboard
+from bot.poller.steam_fetcher import SteamFetcher
 from bot.services.steam.client import SteamApiError, get_profile, resolve_steam_id
+
+log = logging.getLogger(__name__)
 
 router = Router(name="steam")
 
@@ -65,7 +65,12 @@ async def disconnect_steam_in_group(message: Message, bot: Bot) -> None:
 
 @router.message(Command("connect_steam"), F.chat.type == ChatType.PRIVATE)
 async def connect_steam(
-    message: Message, repo: Repo, settings: Settings, command: CommandObject
+    message: Message,
+    repo: Repo,
+    settings: Settings,
+    command: CommandObject,
+    steam_fetcher: SteamFetcher,
+    bot: Bot,
 ) -> None:
     if settings.steam_api_key is None:
         await message.answer(NOT_CONFIGURED)
@@ -103,10 +108,34 @@ async def connect_steam(
     await repo.link_platform_account(
         message.chat.id, "steam", profile.steam_id, profile.persona_name
     )
-    await message.answer(
-        f"Подключил Steam: {profile.persona_name}.\n\n"
-        "Пока это только привязка аккаунта — публикация ачивок Steam и "
-        "статистика по ним появятся отдельным шагом."
+    await message.answer(f"Подключил Steam: {profile.persona_name}.")
+
+    # Backgrounded (SPEC 9, M-Steam-2d) — a big library is genuinely
+    # hundreds of requests, the /connect_steam reply must not wait for it.
+    # Run on every link, not just the first (link_platform_account already
+    # replaces an existing one) — idempotent and safe, same reasoning as
+    # Xbox's refresh_after_reconnect (main.py).
+    await message.answer("Читаю твою историю ачивок Steam, это может занять пару минут…")
+    asyncio.create_task(  # noqa: RUF006
+        _backfill_and_notify(bot, steam_fetcher, message.chat.id, profile.steam_id)
+    )
+
+
+async def _backfill_and_notify(
+    bot: Bot, fetcher: SteamFetcher, tg_id: int, steam_id: str
+) -> None:
+    try:
+        count = await fetcher.backfill(tg_id, steam_id)
+    except Exception:
+        log.exception("steam backfill for tg_id=%s failed", tg_id)
+        await bot.send_message(
+            tg_id,
+            "Не смог перечитать твою историю ачивок Steam. Публикация пока "
+            "выключена — привяжи аккаунт заново чуть позже: /connect_steam.",
+        )
+        return
+    await bot.send_message(
+        tg_id, f"Готово: перечитал {count} уже выбитых ачивок Steam — в чат они не полетят."
     )
 
 
@@ -136,7 +165,13 @@ async def disconnect_steam_cancel(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "steam:disconnect:yes")
 async def disconnect_steam_confirm(callback: CallbackQuery, repo: Repo) -> None:
+    link = await repo.get_platform_link(callback.from_user.id, "steam")
     await repo.unlink_platform_account(callback.from_user.id, "steam")
+    if link is not None:
+        # Symmetric with Xbox's disconnect (connect.py, delete_presence_state)
+        # — a stale presence row would otherwise keep answering /online for
+        # an account that's no longer linked to anyone.
+        await repo.delete_steam_presence_state(link.external_id)
     if isinstance(callback.message, Message):
         await callback.message.edit_text("Отключил Steam. Вернуться можно в любой момент.")
     await callback.answer()

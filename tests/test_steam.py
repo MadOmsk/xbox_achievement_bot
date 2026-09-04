@@ -12,7 +12,9 @@ from bot.services.steam import client as steam_client
 from bot.services.steam.client import (
     SteamApiError,
     get_global_percentages,
+    get_owned_games,
     get_player_achievements,
+    get_presence_batch,
     get_profile,
     get_schema,
     resolve_steam_id,
@@ -210,6 +212,70 @@ async def test_get_global_percentages_parses_percent_strings_as_float(
     percentages = await get_global_percentages("550")
 
     assert percentages == {"ACH_A": 69.4, "ACH_B": 12.1}
+
+
+async def test_get_presence_batch_parses_multiple_players(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other_id = "76561197981065056"  # a different, real linked account
+
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        assert path == "/ISteamUser/GetPlayerSummaries/v2/"
+        assert params == {"steamids": f"{STEAM_ID},{other_id}"}
+        return {
+            "players": [
+                {
+                    "steamid": STEAM_ID,
+                    "personaname": "Gabe",
+                    "personastate": 1,
+                    "gameid": "550",
+                    "gameextrainfo": "Left 4 Dead 2",
+                },
+                {"steamid": other_id, "personaname": "Offline Guy", "personastate": 0},
+            ]
+        }
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    result = await get_presence_batch("key", [STEAM_ID, other_id])
+
+    assert set(result) == {STEAM_ID, other_id}
+    playing = result[STEAM_ID]
+    assert (playing.persona_state, playing.gameid, playing.game_name) == (1, "550", "Left 4 Dead 2")
+    offline = result[other_id]
+    assert (offline.persona_state, offline.gameid, offline.game_name) == (0, None, None)
+
+
+async def test_get_presence_batch_omits_a_profile_steam_did_not_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        return {"players": []}
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    assert await get_presence_batch("key", [STEAM_ID]) == {}
+
+
+async def test_get_owned_games_keeps_only_played_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        assert path == "/IPlayerService/GetOwnedGames/v1/"
+        assert params == {"steamid": STEAM_ID, "include_appinfo": "1"}
+        return {
+            "game_count": 2,
+            "games": [
+                {"appid": 550, "name": "Left 4 Dead 2", "playtime_forever": 2265},
+                {"appid": 10, "name": "Counter-Strike", "playtime_forever": 0},
+            ],
+        }
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    games = await get_owned_games("key", STEAM_ID)
+
+    assert [(g.appid, g.name, g.playtime_forever) for g in games] == [
+        ("550", "Left 4 Dead 2", 2265)
+    ]
 
 
 async def test_platform_link_round_trip(repo: Repo) -> None:

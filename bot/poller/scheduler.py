@@ -17,6 +17,7 @@ from bot.poller.daily import DailySummary
 from bot.poller.fetcher import Fetcher
 from bot.poller.presence import PresencePoller
 from bot.poller.reminders import ReminderJob
+from bot.poller.steam_presence import SteamPresencePoller
 
 log = logging.getLogger(__name__)
 
@@ -31,12 +32,14 @@ class PollerScheduler:
         reminders: ReminderJob,
         daily: DailySummary,
         repo: Repo,
+        steam_poller: SteamPresencePoller,
     ) -> None:
         self._poller = poller
         self._fetcher = fetcher
         self._reminders = reminders
         self._daily = daily
         self._repo = repo
+        self._steam_poller = steam_poller
         self._scheduler = AsyncIOScheduler(timezone="UTC")
 
     def start(self) -> None:
@@ -44,6 +47,16 @@ class PollerScheduler:
             self._poller.tick,
             IntervalTrigger(seconds=TICK_SECONDS),
             id="presence",
+            coalesce=True,
+            max_instances=1,
+        )
+        # Registered unconditionally, same as reminders/daily_summary below —
+        # the tick itself exits early when Steam isn't configured (SPEC 9,
+        # M-Steam-2c), simpler than conditionally building the schedule.
+        self._scheduler.add_job(
+            self._steam_poller.tick,
+            IntervalTrigger(seconds=TICK_SECONDS),
+            id="steam_presence",
             coalesce=True,
             max_instances=1,
         )

@@ -1,0 +1,142 @@
+"""Steam presence polling (SPEC 9, M-Steam-2c) — the Steam counterpart of
+poller/presence.py, with one structural difference: GetPlayerSummaries
+accepts up to 100 SteamIDs in a single official call, unlike Xbox's
+one-account-per-request presence provider. So the tick collects who is due
+exactly the same way (each target has its own `_is_due`/`_interval`), but
+the HTTP call itself goes out in batches covering everyone due at once,
+not one request per person.
+
+Every target is handled in isolation — one batch failure or one person's
+unexpected error must never stop the tick for everyone else, the same
+discipline presence.py already follows.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterator
+
+from bot.config import Settings
+from bot.db.repo import Repo, SteamPollTarget
+from bot.poller.steam_fetcher import SteamFetcher
+from bot.services.steam.client import SteamApiError, SteamPresence, get_presence_batch
+from bot.util import parse_iso, utcnow
+
+log = logging.getLogger(__name__)
+
+IDLE_AFTER_SECONDS = 2 * 3600
+DUE_TOLERANCE_SECONDS = 5  # same reasoning as presence.py's own constant
+BATCH_SIZE = 100  # GetPlayerSummaries' own documented limit per call
+
+
+class SteamPresencePoller:
+    def __init__(self, settings: Settings, repo: Repo, fetcher: SteamFetcher) -> None:
+        self._settings = settings
+        self._repo = repo
+        self._fetcher = fetcher
+
+    async def tick(self) -> None:
+        if self._settings.steam_api_key is None:
+            return  # Steam not configured on this instance — same silent
+            # skip /connect_steam already does (M-Steam-1)
+        api_key = self._settings.steam_api_key.get_secret_value()
+
+        due = [t for t in await self._repo.steam_pollable_users() if self._is_due(t)]
+        for chunk in _chunks(due, BATCH_SIZE):
+            try:
+                snapshots = await get_presence_batch(api_key, [t.steam_id for t in chunk])
+            except SteamApiError as exc:
+                log.info("steam presence batch skipped: %s", exc)
+                continue  # this chunk only — at most 100 people, next tick retries
+            for target in chunk:
+                snapshot = snapshots.get(target.steam_id)
+                if snapshot is None:
+                    continue  # private/deleted profile this tick — skip, not fatal
+                try:
+                    await self._handle(target, snapshot)
+                except Exception:
+                    log.exception("unexpected failure polling steam_id=%s", target.steam_id)
+
+    async def _handle(self, target: SteamPollTarget, snapshot: SteamPresence) -> None:
+        changed = (
+            snapshot.persona_state != target.persona_state or snapshot.gameid != target.gameid
+        )
+        await self._repo.save_steam_presence_state(
+            target.steam_id,
+            snapshot.persona_state,
+            snapshot.gameid,
+            snapshot.game_name,
+            changed=changed,
+        )
+        # Already have a fresh persona name from this same batch call — keep
+        # the panel/connect card from drifting stale, at zero extra cost.
+        await self._repo.update_platform_display_name(target.tg_id, "steam", snapshot.persona_name)
+
+        in_game = snapshot.persona_state != 0 and snapshot.gameid is not None
+
+        if changed and target.gameid:
+            # The final request of the session: an unlock is often right
+            # before quitting (same reasoning as presence.py, SPEC 5.3).
+            await self._poll_achievements(
+                target, snapshot.persona_name, target.gameid, target.game_name, force=True
+            )
+
+        if in_game:
+            assert snapshot.gameid is not None
+            await self._poll_achievements(
+                target, snapshot.persona_name, snapshot.gameid, snapshot.game_name, force=changed
+            )
+
+    async def _poll_achievements(
+        self,
+        target: SteamPollTarget,
+        persona_name: str,
+        gameid: str,
+        game_name: str | None,
+        *,
+        force: bool,
+    ) -> None:
+        if not force and not self._debounce_passed(target):
+            return
+        await self._fetcher.poll_title(
+            target.tg_id, target.steam_id, persona_name, gameid, game_name
+        )
+
+    def _debounce_passed(self, target: SteamPollTarget) -> bool:
+        """No more than one achievement request per game every two minutes
+        (same interval Xbox uses, SPEC 5.3) — reused rather than a separate
+        Steam-specific setting, since the politeness reasoning is identical
+        and Steam's own budget is nowhere near a constraint either."""
+        last = parse_iso(target.last_ach_poll_at)
+        if last is None:
+            return True
+        elapsed = (utcnow() - last).total_seconds()
+        return elapsed >= self._settings.achievement_poll_interval - DUE_TOLERANCE_SECONDS
+
+    def _is_due(self, target: SteamPollTarget) -> bool:
+        last = parse_iso(target.updated_at)
+        if last is None:
+            return True
+        return (utcnow() - last).total_seconds() >= self._interval(target) - DUE_TOLERANCE_SECONDS
+
+    def _interval(self, target: SteamPollTarget) -> int:
+        """Sparser polling of absent people is politeness, not thrift, same
+        as presence.py — reuses the same presence_interval_* settings
+        rather than a Steam-specific copy (SPEC 9, M-Steam-2c): Steam's own
+        budget isn't the constraint here either."""
+        if target.persona_state is not None and target.persona_state != 0:
+            return (
+                self._settings.presence_interval_in_game
+                if target.gameid
+                else self._settings.presence_interval_online
+            )
+        changed = parse_iso(target.changed_at)
+        offline_for = (utcnow() - changed).total_seconds() if changed else 0.0
+        if offline_for >= IDLE_AFTER_SECONDS:
+            return self._settings.presence_interval_idle
+        return self._settings.presence_interval_offline
+
+
+def _chunks(items: list[SteamPollTarget], size: int) -> Iterator[list[SteamPollTarget]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]

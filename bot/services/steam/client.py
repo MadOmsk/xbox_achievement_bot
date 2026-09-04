@@ -114,6 +114,73 @@ async def get_profile(api_key: str, steam_id: str) -> SteamProfile:
     )
 
 
+@dataclass(slots=True)
+class SteamPresence:
+    """One GetPlayerSummaries entry, presence fields only (SPEC 9,
+    M-Steam-2c) — persona_name is included too since a batched presence
+    call already has it fresh, sparing the poller a separate lookup the
+    way Xbox needs one for a PC title's name (presence.py)."""
+
+    steam_id: str
+    persona_name: str
+    persona_state: int  # Steam's own enum, 0=offline..6
+    gameid: str | None
+    game_name: str | None  # gameextrainfo — set only while actually playing
+
+
+async def get_presence_batch(api_key: str, steam_ids: list[str]) -> dict[str, SteamPresence]:
+    """Up to 100 SteamIDs in one official call (SPEC 9, M-Steam-2c) — the
+    caller is responsible for chunking a longer list. A profile Steam
+    doesn't return at all (deleted/banned account) is simply absent from
+    the result, not an error."""
+    payload = await _get(
+        "/ISteamUser/GetPlayerSummaries/v2/", api_key, {"steamids": ",".join(steam_ids)}
+    )
+    result: dict[str, SteamPresence] = {}
+    for player in payload.get("players") or []:
+        steam_id = player.get("steamid")
+        if not steam_id:
+            continue
+        result[str(steam_id)] = SteamPresence(
+            steam_id=str(steam_id),
+            persona_name=player.get("personaname") or str(steam_id),
+            persona_state=int(player.get("personastate") or 0),
+            gameid=player.get("gameid"),
+            game_name=player.get("gameextrainfo"),
+        )
+    return result
+
+
+@dataclass(slots=True)
+class OwnedGame:
+    appid: str
+    name: str
+    playtime_forever: int
+
+
+async def get_owned_games(api_key: str, steam_id: str) -> list[OwnedGame]:
+    """Only games with real playtime (SPEC 9, M-Steam-2d) — a game never
+    launched has nothing to backfill, and asking about it wastes a request
+    for every game in a large library. Verified live: 617 owned games, 306
+    with playtime_forever > 0, on the same account used throughout M-Steam
+    research."""
+    payload = await _get(
+        "/IPlayerService/GetOwnedGames/v1/",
+        api_key,
+        {"steamid": steam_id, "include_appinfo": "1"},
+    )
+    games = payload.get("games") or []
+    return [
+        OwnedGame(
+            appid=str(item["appid"]),
+            name=item.get("name") or str(item["appid"]),
+            playtime_forever=int(item.get("playtime_forever") or 0),
+        )
+        for item in games
+        if item.get("appid") and int(item.get("playtime_forever") or 0) > 0
+    ]
+
+
 async def get_player_achievements(
     api_key: str, steam_id: str, appid: str
 ) -> list[RawAchievement]:

@@ -32,6 +32,8 @@ from bot.poller.presence import PresencePoller
 from bot.poller.publisher import Publisher
 from bot.poller.reminders import ReminderJob
 from bot.poller.scheduler import PollerScheduler
+from bot.poller.steam_fetcher import SteamFetcher
+from bot.poller.steam_presence import SteamPresencePoller
 from bot.services.connect import ConnectService
 from bot.services.crypto import TokenCipher
 from bot.services.message_log import MessageLogMiddleware
@@ -86,8 +88,16 @@ async def run(settings: Settings) -> None:
     publisher = Publisher(bot, repo)
     fetcher = Fetcher(repo, client, publisher, settings.backfill_concurrency)
     poller = PresencePoller(settings, repo, client, fetcher)
+
+    # Never actually read when Steam isn't configured — every caller (the
+    # presence tick, /connect_steam) checks settings.steam_api_key first
+    # and never reaches SteamFetcher at all in that case (SPEC 9, M-Steam-2c).
+    steam_api_key = settings.steam_api_key.get_secret_value() if settings.steam_api_key else ""
+    steam_fetcher = SteamFetcher(repo, steam_api_key, publisher, settings.backfill_concurrency)
+    steam_poller = SteamPresencePoller(settings, repo, steam_fetcher)
+
     scheduler = PollerScheduler(
-        poller, fetcher, ReminderJob(bot, repo), DailySummary(bot, repo), repo
+        poller, fetcher, ReminderJob(bot, repo), DailySummary(bot, repo), repo, steam_poller
     )
 
     async def backfill(tg_id: int, xuid: str) -> None:
@@ -168,6 +178,7 @@ async def run(settings: Settings) -> None:
     dispatcher["repo"] = repo
     dispatcher["connect"] = connect_service
     dispatcher["fetcher"] = fetcher
+    dispatcher["steam_fetcher"] = steam_fetcher
     dispatcher["settings"] = settings
     dispatcher["notifier"] = notifier
     dispatcher.message.outer_middleware(UsernameMiddleware(repo))

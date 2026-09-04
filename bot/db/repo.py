@@ -1559,6 +1559,20 @@ class Repo:
         )
         await self._conn.commit()
 
+    async def update_platform_display_name(
+        self, tg_id: int, platform: str, display_name: str
+    ) -> None:
+        """Opportunistic refresh only (SPEC 9, M-Steam-2c) — the presence
+        poller already has a fresh persona name from the same batch call it
+        used to update presence, so the panel/connect card doesn't drift
+        stale between actual /connect_steam calls. A no-op if the link was
+        removed in the meantime (no row to update)."""
+        await self._conn.execute(
+            "UPDATE platform_links SET display_name = ? WHERE tg_id = ? AND platform = ?",
+            (display_name, tg_id, platform),
+        )
+        await self._conn.commit()
+
     async def get_platform_link(self, tg_id: int, platform: str) -> PlatformLink | None:
         cursor = await self._conn.execute(
             "SELECT tg_id, platform, external_id, display_name, linked_at "
