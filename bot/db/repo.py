@@ -189,6 +189,7 @@ class RecentAchievement:
     rarity_percent: float | None
     platform: str
     unlocked_at: str | None
+    is_secret: bool = False
 
 
 @dataclass(slots=True)
@@ -984,7 +985,7 @@ class Repo:
     async def chat_recent(self, chat_id: int, limit: int) -> list[RecentAchievement]:
         cursor = await self._conn.execute(
             "SELECT u.gamertag, s.name, t.name AS game, s.gamerscore, s.rarity_percent,"
-            "       s.platform, s.unlocked_at "
+            "       s.platform, s.unlocked_at, s.is_secret "
             "FROM subscriptions sub "
             "JOIN users u ON u.tg_id = sub.tg_id "
             "JOIN seen_achievements s ON s.xuid = u.xuid "
@@ -1002,6 +1003,7 @@ class Repo:
                 rarity_percent=row["rarity_percent"],
                 platform=row["platform"],
                 unlocked_at=row["unlocked_at"],
+                is_secret=bool(row["is_secret"]),
             )
             for row in await cursor.fetchall()
         ]

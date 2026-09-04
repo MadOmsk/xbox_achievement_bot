@@ -450,9 +450,17 @@ def _recent_table(rows: list[RecentAchievement]) -> str:
     )
 
 
+SECRET_ACHIEVEMENT_NAME = "🔒 Секретная"
+
+
 def _recent_row(row: RecentAchievement) -> list[str]:
+    # A Telegram spoiler tag can't live inside a <pre> table (Telegram
+    # strips/rejects nested entities there, and render_table HTML-escapes
+    # the finished block anyway) — a plain placeholder is the one thing that
+    # actually works in this monospace context (SPEC 6.3, 7.1).
+    display_name = SECRET_ACHIEVEMENT_NAME if row.is_secret else row.name
     badge = rarity_badge(row.rarity_percent)
-    name = f"{badge}{row.name}" if badge else row.name
+    name = f"{badge}{display_name}" if badge else display_name
     return [
         truncate_name(row.gamertag or "кто-то", 12),
         truncate_name(name, 18),
