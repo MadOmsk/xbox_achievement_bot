@@ -1958,27 +1958,302 @@ Steam. 25 юнит-тестов на клиент и на склейку/кэш.
   спека этого не покрывает — see fixed there, а recent-games источник для
   Steam ещё предстоит спроектировать отдельно, не в этом шаге).
 
-**M-Steam-2d (не начато). Бэкфил при привязке.** Тем же принципом, что и у
-Xbox (5.6) — при `/connect_steam` тянем всё уже разблокированное как
-`is_backfill=1`, ничего не публикуя, иначе первая же игра с сотней ачивок
-выльется в чат разом. Дороже, чем у Xbox: нет одного вызова на всю
-библиотеку, нужен проход по каждой игре из `GetOwnedGames` с
-`playtime_forever > 0` — потенциально много вызовов на первую привязку,
-фоновой задачей с ограничением одновременных, как у Xbox.
+**M-Steam-2d (не начато). Бэкфил при привязке.**
+
+- **Новый клиент-метод.** `services/steam/client.py` получает
+  `get_owned_games(api_key, steam_id) -> list[OwnedGame]` —
+  `IPlayerService/GetOwnedGames/v1/` с `include_appinfo=1`. Проверено
+  вживую (тот же аккаунт, что и весь остальной Steam-research): 617 игр в
+  библиотеке, 306 с `playtime_forever > 0`. Именно этот фильтр и
+  применяется в клиенте — игру, в которую ни разу не играли, спрашивать
+  об ачивках нет смысла: `OwnedGame(appid: int, name: str,
+  playtime_forever: int)`, фильтрация по `playtime_forever > 0` — внутри
+  функции, наружу отдаются уже только те, что стоит опрашивать.
+
+- **Дорого не как у Xbox, по-честному.** У Xbox бэкфил — один вызов на всю
+  библиотеку (контракт 2) плюс отдельный проход только по x360-играм из
+  истории. У Steam такого группового вызова нет: `fetch_unlocked()` (2b)
+  дёргается **на каждую** сыгранную игру отдельно — на аккаунте из
+  проверки это 306 вызовов `fetch_unlocked`, каждый до 3 HTTP-запросов
+  (ачивки человека всегда, схема и редкость — только на первый раз, что
+  игру вообще увидели, дальше из кэша навсегда/на неделю, 2b). Первая
+  привязка человека с большой библиотекой — это реально сотни запросов,
+  не единицы.
+
+- **Двухуровневое ограничение параллелизма**, `poller/steam_fetcher.py`
+  (тот же файл, что и у поллера, 2c — `SteamFetcher.backfill()` рядом с
+  `poll_title()`):
+
+  ```python
+  # По одному инстансу SteamFetcher на процесс — эти константы модульные,
+  # не Settings: это internal tuning, не то, что администратор станет
+  # крутить (тот же довод, что у DUE_TOLERANCE_SECONDS в presence.py).
+  GAME_BACKFILL_CONCURRENCY = 5  # игр одного бэкфила одновременно
+
+  class SteamFetcher:
+      def __init__(self, repo, api_key, publisher, concurrency=2):
+          self._repo = repo
+          self._api_key = api_key
+          self._publisher = publisher
+          self._backfill_slots = asyncio.Semaphore(concurrency)  # людей одновременно
+          self._game_slots = asyncio.Semaphore(GAME_BACKFILL_CONCURRENCY)
+
+      async def backfill(self, tg_id: int, steam_id: str) -> int:
+          async with self._backfill_slots:
+              games = await get_owned_games(self._api_key, steam_id)
+              rows: list[AchievementRow] = []
+
+              async def one(game: OwnedGame) -> None:
+                  async with self._game_slots:
+                      try:
+                          parsed = await fetch_unlocked(
+                              self._repo, self._api_key, steam_id, str(game.appid)
+                          )
+                      except SteamApiError as exc:
+                          log.info("steam backfill of appid=%s skipped: %s", game.appid, exc)
+                          return
+                      rows.extend(_to_row(item) for item in parsed)
+
+              await asyncio.gather(*(one(g) for g in games))
+              await self._repo.insert_new_achievements_steam(
+                  tg_id, steam_id, rows, is_backfill=True
+              )
+              log.info("steam backfill for tg_id=%s stored %s achievements", tg_id, len(rows))
+              return len(rows)
+  ```
+
+  `self._backfill_slots` — сколько **людей** бэкфилятся параллельно
+  (переиспользует `settings.backfill_concurrency`, тот же смысл, что у
+  Xbox `Fetcher`). `self._game_slots` — сколько **игр одного бэкфила**
+  опрашивается параллельно; у Xbox такого второго уровня не было, потому
+  что там просто нечего так ограничивать (один вызов на всю библиотеку).
+  Каждая игра изолирована: `SteamApiError` на одной не должен уронить весь
+  бэкфил — тот же принцип, что «один проблемный юзер не должен ронять
+  тик поллера» (правила проекта), применённый на уровень ниже, к одной
+  игре внутри одного бэкфила.
+
+  Собирает все строки в память и пишет **одним вызовом**
+  `insert_new_achievements_steam` в конце — так же, как Xbox-бэкфил
+  собирает `rows` в список и вставляет разом, не по мере готовности
+  каждой игры.
+
+- **`Repo.insert_new_achievements_steam(tg_id, steam_id, achievements, *,
+  is_backfill) -> list[AchievementRow]`** — тот самый метод, спроектированный
+  в 2c (закрывает долг 2a: у Xbox-метода `tg_id` резолвится через
+  `get_user_by_xuid`, чего для Steam физически нет; здесь `tg_id` и так
+  уже есть на входе, резолвить неоткуда не нужно). Общий для 2c
+  (`poll_title`) и 2d (`backfill`) — реализуется один раз, кто бы из них
+  ни писался первым по факту, а не обязательно в порядке номеров шагов.
+
+- **Точка вызова: `handlers/steam.py::connect_steam()`.** После успешного
+  `repo.link_platform_account(...)` — фоновой задачей, не await'ом внутри
+  хендлера (иначе ответ на `/connect_steam` подвиснет на те самые
+  сотни запросов):
+
+  ```python
+  asyncio.create_task(_backfill_and_notify(bot, steam_fetcher, message.chat.id, profile.steam_id))
+  ```
+
+  `_backfill_and_notify` — маленькая приватная функция **в `steam.py`
+  же**, не в `main.py`: в отличие от Xbox (чей бэкфил стартует из
+  OAuth-колбэка, аиohttp-сервера, а не самого хендлера — поэтому там
+  замыкание и живёт в `main.py`, рядом со сборкой всего приложения),
+  `/connect_steam` — обычный хендлер aiogram, `bot`/`repo` у него уже
+  есть как обычные параметры; городить такой же мост через `main.py`
+  было бы просто лишним слоем без причины. `steam_fetcher: SteamFetcher`
+  инжектится в диспетчер тем же способом, что `fetcher` для Xbox:
+  `dispatcher["steam_fetcher"] = steam_fetcher` в `main.py`, доступен как
+  параметр хендлера.
+
+  ```python
+  async def _backfill_and_notify(bot: Bot, fetcher: SteamFetcher, tg_id: int, steam_id: str) -> None:
+      try:
+          count = await fetcher.backfill(tg_id, steam_id)
+      except Exception:
+          log.exception("steam backfill for tg_id=%s failed", tg_id)
+          await bot.send_message(
+              tg_id,
+              "Не смог перечитать твою историю ачивок Steam. Публикация пока "
+              "выключена — привяжи аккаунт заново чуть позже: /connect_steam.",
+          )
+          return
+      await bot.send_message(
+          tg_id, f"Готово: перечитал {count} уже выбитых ачивок Steam — в чат они не полетят."
+      )
+  ```
+
+  Текст-заглушка в `connect_steam()`'s ответе — «публикация ачивок Steam и
+  статистика по ним появятся отдельным шагом» — меняется на то же
+  «Готово: перечитал…» сообщение вторым сообщением следом, тем же
+  паттерном, что у Xbox.
+
+  **Бэкфил запускается на каждый `/connect_steam`, а не только на первую
+  привязку** — `link_platform_account` уже `ON CONFLICT ... DO UPDATE`
+  (повторная привязка заменяет старую), и `insert_new_achievements_steam`
+  идемпотентен (`INSERT OR IGNORE`), так что повторный прогон безопасен и
+  заодно чинит тот же класс бага, что Xbox чинит через
+  `refresh_after_reconnect` — если это когда-нибудь понадобится и здесь.
 
 **M-Steam-2e (не начато). UI: `/stats`, `/summary`, `/online`, панель.**
-Решено (TODO.md, раздел «мысль про другие платформы», не сюда до
-реализации): счётчик ачивок в `/stats`/`/summary` — **один, суммой по всем
-платформам** (3 на Xbox + 5 в Steam → «8 ачивок»), гeймерскор — только
-Xbox, для справки, ни в какую сумму не входит (у Steam очков нет вообще).
-Ники платформ — отдельными строками в `/stats`, без своих счётчиков рядом.
-`/summary` сортирует лидерборд по той же сумме. `/online` — если человек
-активен на двух платформах одновременно, берём того, чей presence
-обновлялся позже, а не фиксированный приоритет платформы. `/recent` без
-изменений — общая лента уже сейчас смешивает всё нормально. Панель —
-кнопка-тумблер на каждую подключённую платформу тем же паттерном, что
-«One/Series/PC» (любые/только редкие/скрыто); иконка — цветной кружок
-(🟢 Xbox, ⚫ Steam, 🔵 PlayStation).
+
+Общее решение (TODO.md, раздел «мысль про другие платформы», уже принято
+раньше): счётчик ачивок в `/stats`/`/summary` — **один, суммой по всем
+платформам**, геймерскор — только Xbox, для справки, ни в какую сумму не
+входит. Ниже — куда именно это ложится в реальном коде, по каждому
+экрану.
+
+- **`/stats` (и карточка `/who`, общая реализация —
+  `handlers/chat.py::_build_stats_text`).**
+
+  Сейчас `if not target.xuid: return None` — человек, подключивший
+  **только** Steam, вообще не получает карточку. Меняется на: карточки
+  нет только если нет **вообще ни одной** привязки —
+  `target.xuid is None and not await repo.platform_links_of(target.tg_id)`.
+
+  Счётчики — сейчас `counters_for(repo, target.xuid, ...)`
+  (`services/stats.py`), ключ по `xuid`. Меняется на ключ по `tg_id`:
+  `counters_for(repo, target.tg_id, ...)`, а внутри —
+  `Repo.achievement_counts(xuid, since)` → **`Repo.achievement_counts_for_person
+  (tg_id, since)`**, с `WHERE tg_id = ?` вместо `WHERE xuid = ?`. Это и
+  есть всё суммирование — раз `seen_achievements.tg_id` теперь стоит на
+  каждой строке независимо от платформы (2a), простая смена ключа джойна
+  само по себе даёт сумму по всем платформам, без ручного сложения
+  где-либо в коде. `SUM(gamerscore)` в этом же запросе остаётся
+  корректным без специальной защиты: у Steam-строк `gamerscore` всегда 0
+  (`services/steam/achievements.py`), это уже гарантировано на уровне
+  парсинга, а не что-то, о чём этому запросу нужно знать.
+
+  Шапка карточки — сейчас одна строка «gamertag · gamerscore». Меняется
+  на отдельную строку на каждую подключённую платформу (та самая «пара
+  строк о нике», из исходной идеи):
+
+  ```
+  📊 PlayerTag
+  🟢 Xbox: PlayerTag · gamerscore 12 345
+  ⚫ Steam: PersonaName
+  ```
+
+  Собирается из `target` (Xbox, если `target.xuid`) плюс
+  `repo.platform_links_of(target.tg_id)` (уже существует, M-Steam-1) —
+  для каждой ссылки своя строка, без счётчика рядом (общий счётчик — ниже,
+  один на всех). Иконки те же кружки, что и в панели (ниже) — не
+  путать с `_presence_icon` у `/online`: там 🟢/🟡/⚪ значит «в
+  игре/онлайн/нет данных», это отдельная система цветов для отдельного
+  экрана, совпадение с иконкой Xbox тут — просто совпадение, а не связь.
+
+  **Список игр («Игры за N дней») сознательно не трогается в этом шаге** —
+  он и дальше только Xbox: под него нужен Steam-аналог `title_history`
+  (недавно сыгранные игры), которого пока нет и который 2c явно вынесла
+  за скобки («что не входит в 2c»). Добавлять сюда Steam-игры раньше, чем
+  появится этот источник, значит либо ничего не показывать для Steam
+  (непонятно зачем тогда трогать), либо тянуть `GetOwnedGames` живьём на
+  каждый `/stats` (нарушает «Кэш» — хендлеры не ходят в API). Остаётся
+  долгом на отдельный подшаг, не 2e.
+
+- **`/summary` и ежедневный итог (`Repo.chat_member_stats`,
+  `poller/daily.py`).** Уже группирует по `u.tg_id` — верный ключ с самого
+  начала, ломает сумму только один JOIN:
+
+  ```sql
+  -- было:
+  LEFT JOIN seen_achievements s ON s.xuid = u.xuid
+  -- станет:
+  LEFT JOIN seen_achievements s ON s.tg_id = u.tg_id
+  ```
+
+  Больше в этом запросе менять нечего — `COUNT`/`SUM(gamerscore)`/подсчёт
+  редких через `rarity_percent` уже работают правильно после этой одной
+  правки, тем же рассуждением, что для `/stats` выше. `ChatMemberStat.xuid`
+  остаётся в структуре (нигде не читается за пределами самой структуры —
+  не мешает), но по-хорошему меняет тип на `str | None`: `u.xuid` уже
+  сейчас может быть `NULL` для человека без Xbox, просто раньше такие
+  люди не давали строк в JOIN и это было не видно.
+
+- **`/online` (`Repo.chat_member_presence`, `ChatPresenceRow`).**
+  Зависит от 2c (`steam_presence_state` должна существовать). Нормализация
+  происходит **в самом запросе**, не в хендлере — `_presence_text`/
+  `_presence_icon` (`handlers/chat.py`) уже работают на паре `state`
+  (`"Online"`/иначе)/`title_id`/`title_name` в Xbox-терминах, и меняться
+  не должны вообще: если сам запрос отдаёт эту пару в тех же терминах
+  независимо от платформы-источника, форматирование ничего не должно
+  знать про Steam.
+
+  ```sql
+  SELECT u.tg_id, u.gamertag, u.xuid,
+         CASE
+           WHEN sp.updated_at IS NOT NULL
+                AND (xp.updated_at IS NULL OR sp.updated_at > xp.updated_at)
+           THEN CASE WHEN sp.persona_state != 0 THEN 'Online' ELSE 'Offline' END
+           WHEN xp.state IS NOT NULL THEN xp.state
+           ELSE NULL
+         END AS state,
+         CASE
+           WHEN sp.updated_at IS NOT NULL
+                AND (xp.updated_at IS NULL OR sp.updated_at > xp.updated_at)
+           THEN sp.gameid ELSE xp.title_id
+         END AS title_id,
+         CASE
+           WHEN sp.updated_at IS NOT NULL
+                AND (xp.updated_at IS NULL OR sp.updated_at > xp.updated_at)
+           THEN sp.game_name ELSE xp.title_name
+         END AS title_name
+  FROM (...) member  -- та же union подписчиков/chat_seen, что и сейчас
+  JOIN users u ON u.tg_id = member.tg_id
+  LEFT JOIN presence_state xp ON xp.xuid = u.xuid
+  LEFT JOIN platform_links pl ON pl.tg_id = u.tg_id AND pl.platform = 'steam'
+  LEFT JOIN steam_presence_state sp ON sp.steam_id = pl.external_id
+  WHERE u.is_excluded = 0
+  ```
+
+  «Активен на двух платформах одновременно — берём того, чей presence
+  обновлялся позже» — это и есть сравнение `sp.updated_at`/`xp.updated_at`
+  выше; никакого фиксированного приоритета платформы нигде. Steam's
+  `persona_state` — Steam-own enum (0=offline..6), не строка — `!= 0`
+  трактуется как «онлайн», тем же порогом, что уже решён в 2c для
+  `in_game`. `/who`'s кнопочный список (та же `chat_member_presence`)
+  автоматически получает то же самое, без отдельных правок.
+
+- **`/recent` — без изменений.** Общая лента (`chat_recent`) уже фильтрует
+  и сортирует по `unlocked_at`/`title_id`/`achievement_id` независимо от
+  платформы (Xbox 360 через неё уже проходит) — Steam-строки лягут туда
+  тем же путём, ничего специфичного для платформы в этом запросе нет.
+
+- **Панель — булев тумблер на платформу, не тройной селектор.** Исходная
+  идея была «тем же паттерном, что One/Series/PC (любые/только
+  редкие/скрыто)» — при реализации это оказалось бы отдельным
+  `rarity_mode` **на каждую платформу** (Xbox — свой, Steam — свой),
+  сравнимо по объёму с тем, как SPEC 5.5/5.7 в своё время нарочно убрали
+  чат-уровневый rarity-тумблер как «второй переключатель, который никому
+  не нужно было согласовывать отдельно» (раздел 1, приложение А — та же
+  логика). Личный `rarity_mode` — это выбор человека о себе, не о
+  платформе; ничего в исходной идее не объясняло, зачем ему может
+  понадобиться «на Xbox — только редкие, в Steam — все». Упрощено до
+  того же самого механизма, что уже есть у Xbox 360: булево
+  видимость/невидимость на платформу, встроенное в уже существующий
+  `x360`-путь `passes_filters()`, а не новая система рядом с ней.
+
+  ```sql
+  ALTER TABLE platform_links ADD COLUMN visible INTEGER NOT NULL DEFAULT 1;
+  -- rebuild-and-swap, не голый ALTER — тот же довод, что у migration 006/012:
+  -- schema.sql уже создаст эту колонку для новой базы.
+  ```
+
+  `UserSettings` (репозиторий) получает `steam_visible: bool`, заполняется
+  в `get_user_settings()` через `LEFT JOIN platform_links pl ON pl.tg_id =
+  tg_id AND pl.platform = 'steam'`, `COALESCE(pl.visible, 1)`.
+  `services/achievements.py::passes_filters()` получает одну новую ветку
+  рядом с уже существующей x360-веткой:
+
+  ```python
+  if achievement.platform == "steam":
+      return user.steam_visible
+  ```
+
+  Панель — новая кнопка-тумблер на каждую подключённую платформу, тем же
+  паттерном, что уже есть у `show_x360` (`handlers/panel.py`, булев тычок,
+  не отдельное меню). Иконка — цветной кружок (🟢 Xbox, ⚫ Steam,
+  🔵 PlayStation, когда появится PSN) рядом с названием платформы и её
+  ником — те же кружки, что в шапке `/stats` выше.
 
 Между подшагами можно останавливаться и деплоить — 2a уже в проде сам по
 себе ничего не меняет для пользователя, просто готовит почву.
