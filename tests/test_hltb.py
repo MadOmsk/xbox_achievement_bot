@@ -20,6 +20,8 @@ def result(hltb_id: int = 1, year: int | None = 2021) -> HltbResult:
         extra_hours=19.5,
         completionist_hours=29.2,
         platforms=["PC", "Xbox Series X/S"],
+        game_url="https://howlongtobeat.com/game/1",
+        image_url="https://howlongtobeat.com/games/1_Halo_Infinite.jpg",
     )
 
 
@@ -60,11 +62,15 @@ def test_from_cache_row_round_trips() -> None:
         extra_hours=None,
         completionist_hours=15.0,
         platforms=["PS5"],
+        game_url="https://howlongtobeat.com/game/42",
+        image_url="https://howlongtobeat.com/games/42_A_Game.jpg",
     )
     r = _from_cache_row(row)
     assert (r.hltb_id, r.name, r.release_year) == (42, "A Game", 2020)
     assert (r.main_hours, r.extra_hours, r.completionist_hours) == (5.0, None, 15.0)
     assert r.platforms == ["PS5"]
+    assert r.game_url == "https://howlongtobeat.com/game/42"
+    assert r.image_url == "https://howlongtobeat.com/games/42_A_Game.jpg"
 
 
 def test_label_includes_year_when_known() -> None:
@@ -81,17 +87,49 @@ def test_card_shows_a_dash_for_missing_completion_times() -> None:
         extra_hours=None,
         completionist_hours=None,
         platforms=[],
+        game_url=None,
+        image_url=None,
     )
     text = _card(incomplete)
     assert "Coop Only" in text
     assert "—" in text
     assert "None" not in text
     assert "Платформы" not in text  # nothing to show — no empty line either
+    assert "howlongtobeat.com" not in text  # no link without a URL either
 
 
 def test_card_lists_platforms_when_known() -> None:
     text = _card(result())
     assert "Платформы: PC, Xbox Series X/S" in text
+
+
+def test_card_links_to_the_hltb_page_when_known() -> None:
+    text = _card(result())
+    assert '<a href="https://howlongtobeat.com/game/1">' in text
+
+
+def test_card_uses_a_dot_separator_not_padding_spaces() -> None:
+    text = _card(result())
+    assert "Основной сюжет · 11.3 ч" in text
+    assert "     " not in text  # the old manual-alignment padding is gone
+
+
+def test_card_escapes_html_in_external_hltb_text() -> None:
+    tricky = HltbResult(
+        hltb_id=1,
+        name="<b>Evil</b> & Co",
+        release_year=None,
+        main_hours=None,
+        extra_hours=None,
+        completionist_hours=None,
+        platforms=["A & B"],
+        game_url=None,
+        image_url=None,
+    )
+    text = _card(tricky)
+    assert "<b>Evil</b> & Co" not in text
+    assert "&lt;b&gt;Evil&lt;/b&gt; &amp; Co" in text
+    assert "A &amp; B" in text
 
 
 def test_results_keyboard_paginates_five_per_page_with_nav() -> None:

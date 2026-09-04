@@ -17,6 +17,7 @@ one unambiguously.
 from __future__ import annotations
 
 import contextlib
+import html
 import logging
 import time
 from dataclasses import dataclass, field
@@ -295,25 +296,50 @@ async def _show_card(bot: Bot, repo: Repo, chat_id: int, message_id: int, hltb_i
         result = await resolve(repo, hltb_id)
     except HltbError:
         return False
-    await _edit(bot, chat_id, message_id, _card(result), None, html=True)
+    await _send_card(bot, chat_id, message_id, result)
     return True
+
+
+async def _send_card(bot: Bot, chat_id: int, message_id: int, result: HltbResult) -> None:
+    """A cover image can't land on a message that started as plain text —
+    Telegram's editMessageMedia only swaps media for media, never text for
+    media. So the card becomes a fresh photo message and the old prompt is
+    deleted (same "delete rather than leave stale text" call as cancel,
+    SPEC 6.6), falling back to the old in-place text edit if there is no
+    image or Telegram refuses to fetch it."""
+    caption = _card(result)
+    if result.image_url:
+        try:
+            await bot.send_photo(
+                chat_id, photo=result.image_url, caption=caption, parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            log.info("could not send hltb cover for id=%s, falling back to text", result.hltb_id)
+        else:
+            with contextlib.suppress(Exception):
+                await bot.delete_message(chat_id, message_id)
+            return
+    await _edit(bot, chat_id, message_id, caption, None, html=True)
 
 
 def _card(result: HltbResult) -> str:
     def fmt(hours: float | None) -> str:
         return f"{hours:.1f} ч" if hours else "—"
 
-    title = f"⏱ <b>{result.name}</b>"
+    title = f"⏱ <b>{html.escape(result.name)}</b>"
     if result.release_year:
         title += f" ({result.release_year})"
     lines = [
         f"{title}\n",
-        f"Основной сюжет:     {fmt(result.main_hours)}",
-        f"Основной + доп.:    {fmt(result.extra_hours)}",
-        f"Полное прохождение: {fmt(result.completionist_hours)}",
+        f"Основной сюжет · {fmt(result.main_hours)}",
+        f"Основной + доп. · {fmt(result.extra_hours)}",
+        f"Полное прохождение · {fmt(result.completionist_hours)}",
     ]
     if result.platforms:
-        lines += ["", f"Платформы: {', '.join(result.platforms)}"]
+        lines += ["", f"Платформы: {html.escape(', '.join(result.platforms))}"]
+    if result.game_url:
+        url = html.escape(result.game_url, quote=True)
+        lines += ["", f'<a href="{url}">Страница на HowLongToBeat ↗</a>']
     return "\n".join(lines)
 
 

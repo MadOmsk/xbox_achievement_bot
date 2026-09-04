@@ -39,6 +39,8 @@ class HltbResult:
     extra_hours: float | None
     completionist_hours: float | None
     platforms: list[str]
+    game_url: str | None
+    image_url: str | None
 
 
 async def search(query: str, limit: int = DEFAULT_MAX_RESULTS) -> list[HltbResult]:
@@ -84,6 +86,8 @@ async def resolve(repo: Repo, hltb_id: int) -> HltbResult:
             extra_hours=result.extra_hours,
             completionist_hours=result.completionist_hours,
             platforms=result.platforms,
+            game_url=result.game_url,
+            image_url=result.image_url,
         )
     )
     return result
@@ -98,6 +102,8 @@ def _as_result(entry: object) -> HltbResult:
         extra_hours=_clean(entry.main_extra),  # type: ignore[attr-defined]
         completionist_hours=_clean(entry.completionist),  # type: ignore[attr-defined]
         platforms=list(entry.profile_platforms or []),  # type: ignore[attr-defined]
+        game_url=entry.game_web_link or None,  # type: ignore[attr-defined]
+        image_url=entry.game_image_url or None,  # type: ignore[attr-defined]
     )
 
 
@@ -110,6 +116,8 @@ def _from_cache_row(row: HltbCacheRow) -> HltbResult:
         extra_hours=row.extra_hours,
         completionist_hours=row.completionist_hours,
         platforms=row.platforms,
+        game_url=row.game_url,
+        image_url=row.image_url,
     )
 
 

@@ -184,6 +184,8 @@ CREATE TABLE IF NOT EXISTS hltb_cache (
     extra_hours         REAL,
     completionist_hours REAL,
     platforms           TEXT NOT NULL DEFAULT '[]',  -- JSON list, HLTB's profile_platforms
+    game_url            TEXT,  -- game_web_link — the HLTB page itself
+    image_url           TEXT,  -- game_image_url — HLTB's own cover art
     cached_at           TEXT NOT NULL
 );
 
