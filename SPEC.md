@@ -1754,18 +1754,197 @@ Xbox-специфичный источник этого типа. `services/xbox
   побочных эффектов кроме чтения кэша, тестируемая моками HTTP-ответов,
   как уже тестируется `services/hltb.py`.
 
-**M-Steam-2c (не начато). Presence и поллер.** `GetPlayerSummaries` уже
-используется в M-Steam-1 для профиля — та же ручка отдаёт `personastate`
-(онлайн/офлайн) и `gameid`/`gameextrainfo` (сейчас играет, только пока игра
-реально запущена — не «недавно играл»), причём **батчем до 100 SteamID за
-один вызов**, в отличие от одного Xbox-аккаунта за раз. Своя таблица
-`steam_presence_state` (не переиспользуем Xbox-специфичный
-`presence_state` — разная форма данных, разный debounce), свой
-`poller/steam_presence.py` + `poller/steam_fetcher.py` по образу
-`presence.py`/`fetcher.py`: увидели `gameid`, подождали debounce, опросили
-ачивки этой игры, дедуп через `seen_achievements` (уже готов, 2a),
-публикация — тем же `Publisher`, он уже работает с обобщённым
-`AchievementRow` и ничего не знает про Xbox конкретно.
+**M-Steam-2c (не начато). Presence и поллер.**
+
+- **Отличие от Xbox, которое меняет форму тика.** `GetPlayerSummaries`
+  отдаёт `personastate` (0=offline..6, Steam-own enum) и
+  `gameid`/`gameextrainfo` (сейчас играет — только пока игра реально
+  запущена, не «недавно играл» — это отдельный `GetRecentlyPlayedGames`,
+  сюда не относится), причём **батчем до 100 SteamID за один официально
+  документированный вызов**, в отличие от одного Xbox-аккаунта за раз
+  (`presence.py`'s `_handle` вызывается по одному). Поэтому `tick()` не
+  копирует Xbox-поллер построчно: список «кому пора» собирается как и
+  раньше (свой `_is_due`/`_interval` на каждого), но сам HTTP-запрос идёт
+  чанками по 100 через всех разом, а не по одному на человека — экономия
+  не ради лимита (у публичного Steam-ключа лимит щедрый и не проблема), а
+  просто потому что API это позволяет и незачем не пользоваться.
+  `services/steam/client.py` (тот же файл, что и клиент для ачивок из 2b,
+  просто ещё одна функция в нём — это про presence/профиль, не про
+  ачивки) получает:
+
+  ```python
+  @dataclass(slots=True)
+  class SteamPresence:
+      steam_id: str
+      persona_name: str
+      persona_state: int
+      gameid: str | None
+      game_name: str | None   # gameextrainfo — есть сразу, без отдельного
+                               # резолва тайтла (Xbox об PC-играх так не может)
+
+  async def get_presence_batch(
+      api_key: str, steam_ids: list[str]
+  ) -> dict[str, SteamPresence]:
+      ...  # один и тот же GetPlayerSummaries, что и get_profile(), просто
+           # steamids через запятую, до 100 штук; профилей, которых Steam
+           # не вернул (удалённый/забаненный аккаунт), в словаре просто нет
+  ```
+
+  `in_game` — то же правило, что у Xbox (`state == "Online" and title_id
+  is not None`, `client.py:59`): `persona_state != 0 and gameid is not
+  None`. Специально не полагаемся на один `gameid`: приватность профиля
+  может прятать `personastate`, но кейс «оффлайн, но играет» настолько
+  краевой, что проще последовательно повторить Xbox-правило, чем изобретать
+  новое без реального примера перед глазами.
+
+- **Своя таблица `steam_presence_state`** (не переиспользуем
+  Xbox-специфичный `presence_state` — разная форма полей, отдельный
+  debounce, ключ по `steam_id`, не по `xuid`):
+
+  ```sql
+  CREATE TABLE steam_presence_state (
+      steam_id         TEXT PRIMARY KEY,
+      persona_state    INTEGER NOT NULL,
+      gameid           TEXT,             -- NULL — не в игре
+      game_name        TEXT,             -- gameextrainfo на момент смены
+      changed_at        TEXT NOT NULL,
+      last_ach_poll_at  TEXT,
+      updated_at        TEXT NOT NULL
+  );
+  ```
+
+  Один в один по смыслу с `presence_state(xuid, state, title_id,
+  title_name, changed_at, last_ach_poll_at, updated_at)`, просто
+  `persona_state`/`gameid`/`game_name` вместо `state`/`title_id`/
+  `title_name`. `Repo` получает симметричный набор: `SteamPollTarget`
+  (те же поля, что `PollTarget`, плюс `persona_state`/`gameid`/`game_name`
+  вместо `state`/`title_id`/`title_name`), `steam_pollable_users() ->
+  list[SteamPollTarget]` (JOIN `platform_links` где `platform='steam'` →
+  `users` → LEFT JOIN `steam_presence_state`, фильтр `is_excluded = 0` —
+  **без джойна на `tokens`**, потому что у Steam нет per-user OAuth
+  вообще, один общий ключ на весь бот, SPEC 1.1/M-Steam-1), плюс
+  `save_steam_presence_state(...)`, `mark_steam_achievements_polled
+  (steam_id)`, `delete_steam_presence_state(steam_id)` (вызывать из
+  `/disconnect_steam`, симметрично `delete_presence_state` на Xbox-
+  disconnect, `connect.py:129`).
+
+- **`poller/steam_presence.py` — `SteamPresencePoller`, по образу
+  `PresencePoller`, но с батчем вместо цикла запросов:**
+
+  ```python
+  class SteamPresencePoller:
+      async def tick(self) -> None:
+          if not self._settings.steam_api_key:
+              return  # Steam не настроен на этом инстансе — тихо выходим,
+                       # как и /connect_steam уже делает (M-Steam-1)
+          due = [t for t in await self._repo.steam_pollable_users() if self._is_due(t)]
+          for chunk in _chunks(due, 100):
+              try:
+                  snapshots = await get_presence_batch(
+                      api_key, [t.steam_id for t in chunk]
+                  )
+              except SteamApiError as exc:
+                  log.info("steam presence batch skipped: %s", exc)
+                  continue  # весь чанк, не всех — изоляция на уровне чанка,
+                            # не на уровне человека, но чанк = максимум 100
+                            # человек за раз, тик через минуту повторит
+              for target in chunk:
+                  snap = snapshots.get(target.steam_id)
+                  if snap is None:
+                      continue  # приватный/удалённый профиль этим тиком — пропуск
+                  try:
+                      await self._handle(target, snap)
+                  except Exception:
+                      log.exception("unexpected failure polling steam_id=%s", target.steam_id)
+  ```
+
+  `_is_due`/`_interval` — **переиспользуем существующие
+  `presence_interval_*`/`achievement_poll_interval` из `Settings`, не
+  заводим Steam-специфичные копии**: разреженный опрос отсутствующих —
+  вежливость, а не экономия бюджета (тот же принцип, что в
+  `presence.py`), и этот принцип одинаково верен для обеих платформ;
+  заводить отдельный набор чисел ради платформы, у которой сам API и так
+  не давит на лимит, — лишняя настройка без разницы в поведении.
+  `_debounce_passed` — та же логика, что у Xbox (`achievement_poll_
+  interval`, `DUE_TOLERANCE_SECONDS`), читает `target.last_ach_poll_at`.
+
+  `_handle(target, snap)` мирроит `PresencePoller._handle` один в один:
+  `changed = snap.persona_state != target.persona_state or snap.gameid !=
+  target.gameid` → сохранить `steam_presence_state` → если `changed` и
+  был `target.gameid` (старая игра) — форс-опрос **старой** игры (ловим
+  последний unlock перед выходом, тот же довод, что у Xbox, SPEC 5.3) →
+  если сейчас `in_game` — опрос **текущей** игры (форс, если `changed`,
+  иначе через debounce). `persona_name`/`game_name` берём прямо из
+  `snap` — Steam отдаёт их в том же батч-ответе, что и presence, поэтому
+  (в отличие от Xbox, `ensure_title_name`, `presence.py:54`) отдельного
+  резолва тайтла не нужно вообще — PC-геймертега для Steam не бывает,
+  профиль всегда возвращает актуальное `personaname`. Заодно, раз уже
+  получили свежее имя бесплатно, опционально обновляем `platform_links.
+  display_name` — не обязательно для логики, но держит карточку `/panel`
+  и `/connect_steam` не протухшей без отдельного запроса ради этого.
+
+- **`poller/steam_fetcher.py` — `SteamFetcher`, по образу `Fetcher`, но
+  меньше: без `ensure_title_name` (см. выше) и без `backfill`/`catch_up`
+  (это 2d, отдельным шагом).**
+
+  ```python
+  class SteamFetcher:
+      async def poll_title(
+          self, tg_id: int, steam_id: str, persona_name: str, appid: str, game_name: str | None
+      ) -> int:
+          parsed = await fetch_unlocked(self._repo, self._api_key, tg_id, steam_id, appid)  # 2b
+          rows = [_to_row(item) for item in parsed]
+          new_rows = await self._repo.insert_new_achievements_steam(
+              tg_id, steam_id, rows, is_backfill=False
+          )
+          await self._repo.mark_steam_achievements_polled(steam_id)
+          if not new_rows:
+              return 0
+          await self._publisher.publish(tg_id, steam_id, persona_name, new_rows, game_name)
+          return len(new_rows)
+  ```
+
+  **Закрывает конкретный долг из 2a**: `insert_new_achievements(xuid,
+  ...)` резолвит `tg_id` через `get_user_by_xuid(xuid)` — путь, которого у
+  Steam физически нет (`users.xuid` — чисто Xbox-колонка, Steam живёт в
+  `platform_links`). Решение не «научить» существующий метод определять
+  платформу по форме id (хрупко и неявно), а **новый отдельный метод**
+  `insert_new_achievements_steam(tg_id, steam_id, achievements, *,
+  is_backfill) -> list[AchievementRow]`: `tg_id` тут и так уже есть
+  без всякого резолва — `steam_pollable_users()` достаёт его прямо из
+  `platform_links` при джойне, резолвить неоткуda не нужно.
+  Внутри — тот же `INSERT OR IGNORE INTO seen_achievements`, что у
+  Xbox-метода, `platform='steam'`, `xuid`-колонка (общая, кросс-
+  платформенная — так и задумано в 011) получает `steam_id`. Xbox-путь
+  `insert_new_achievements` не трогается вообще.
+
+  **Публикатор не меняется вообще.** `Publisher.publish(tg_id, xuid, ...)`
+  уже ничего не знает про Xbox конкретно — `xuid` там всегда была просто
+  «внешний id аккаунта этой платформы», используется только как opaque
+  ключ дедупа в `publications` (тоже без FK, просто TEXT) и для того же
+  ключа в `is_published`/`record_publication`. Коллизия `(xuid, title_id,
+  achievement_id)` между платформами теоретически возможна только если
+  SteamID64 когда-нибудь совпадёт с чьим-то XUID — пространства ID не
+  пересекаются, риск нулевой, как и с самим `seen_achievements` до 2a.
+
+- **Планировщик.** `scheduler.py` получает симметричный job:
+  `self._scheduler.add_job(self._steam_poller.tick, IntervalTrigger
+  (seconds=TICK_SECONDS), id="steam_presence", coalesce=True,
+  max_instances=1)`. Регистрируется всегда, без `if settings.steam_
+  api_key` условия вокруг самой регистрации — тик сам выходит рано, если
+  ключ не настроен (см. выше), это проще, чем условная сборка
+  расписания, и симметрично тому, что `reminders`/`daily_summary` тоже не
+  проверяют, есть ли кому вообще что напоминать.
+
+- **Что явно не входит в 2c.** Backfill при `/connect_steam` — 2d.
+  Обновление «недавних игр» для Steam (`GetOwnedGames`/`GetRecently
+  PlayedGames` в `title_history`-подобную таблицу, на что сейчас
+  опираются `/stats`'s games list и HLTB-подсказки чата) — этим
+  `steam_presence.py` не занимается вообще, список игр для тех экранов
+  для Steam-игр пока пуст; нужно будет отдельным шагом перед тем, как 2e
+  сможет полностью объединить списки игр между платформами (сейчас 2e
+  спека этого не покрывает — see fixed there, а recent-games источник для
+  Steam ещё предстоит спроектировать отдельно, не в этом шаге).
 
 **M-Steam-2d (не начато). Бэкфил при привязке.** Тем же принципом, что и у
 Xbox (5.6) — при `/connect_steam` тянем всё уже разблокированное как
