@@ -10,6 +10,7 @@ from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from bot.config import Settings
 from bot.db.repo import Repo
 from bot.handlers.keyboards import (
     TZ_MANUAL,
@@ -21,6 +22,7 @@ from bot.handlers.keyboards import (
     timezone_keyboard,
 )
 from bot.handlers.panel import render_panel
+from bot.handlers.steam import LINK_PROMPT, NOT_CONFIGURED
 from bot.services.connect import ConnectService
 from bot.services.notify import AdminNotifier
 from bot.util import parse_utc_offset
@@ -45,13 +47,30 @@ REVOKE_URL = "https://account.live.com/consent/Manage"
 
 @router.message(CommandStart(deep_link=True))
 async def start_with_payload(
-    message: Message, command: CommandObject, repo: Repo, connect: ConnectService
+    message: Message,
+    command: CommandObject,
+    repo: Repo,
+    connect: ConnectService,
+    settings: Settings,
 ) -> None:
     """Deep link from a group chat: its buttons send people here (SPEC 6.3)."""
     await repo.ensure_user(message.chat.id, _username(message))
     if command.args == "panel":
         text, markup = await render_panel(repo, message.chat.id)
         await message.answer(text, reply_markup=markup)
+        return
+    if command.args == "connectsteam":
+        # Straight to the prompt, same as /connect_steam's own empty-args
+        # reply — a deep link can't carry the profile URL itself, so this
+        # is as far as a button tap can get (steam.py's own module doc).
+        if settings.steam_api_key is None:
+            await message.answer(NOT_CONFIGURED)
+            return
+        link = await repo.get_platform_link(message.chat.id, "steam")
+        if link is not None:
+            await message.answer(f"Steam уже подключён: {link.display_name}.")
+            return
+        await message.answer(LINK_PROMPT)
         return
     is_connect, origin_chat_id = _parse_connect_payload(command.args or "")
     if is_connect:

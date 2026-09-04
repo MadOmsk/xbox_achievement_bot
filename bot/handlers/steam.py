@@ -33,6 +33,12 @@ router = Router(name="steam")
 NOT_CONFIGURED = "Подключение Steam пока не настроено — обратитесь к администратору."
 PRIVACY_URL = "https://steamcommunity.com/my/edit/settings"
 GROUP_HINT_TTL = 30
+# Shared with connect.py's ?start=connectsteam deep link (the hub keyboard's
+# "Подключить Steam" button) — same prompt either way someone gets here.
+LINK_PROMPT = (
+    "Пришли ссылку на свой профиль Steam (steamcommunity.com/id/...) "
+    "или SteamID64 — команда так: /connect_steam <ссылка>."
+)
 
 
 async def _redirect_to_dm(message: Message, bot: Bot, hint_text: str) -> None:
@@ -78,10 +84,7 @@ async def connect_steam(
 
     raw = (command.args or "").strip()
     if not raw:
-        await message.answer(
-            "Пришли ссылку на свой профиль Steam (steamcommunity.com/id/...) "
-            "или SteamID64 — команда так: /connect_steam <ссылка>."
-        )
+        await message.answer(LINK_PROMPT)
         return
 
     api_key = settings.steam_api_key.get_secret_value()

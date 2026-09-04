@@ -39,13 +39,15 @@ def test_never_polled() -> None:
     assert _presence_text(row) == "нет данных"
 
 
-def test_hub_keyboard_has_exactly_three_buttons_and_carries_the_chat_id() -> None:
+def test_hub_keyboard_has_exactly_four_buttons_and_carries_the_chat_id() -> None:
     markup = hub_keyboard("mybot", CHAT_ID)
     buttons = [b for row in markup.inline_keyboard for b in row]
-    assert len(buttons) == 3
+    assert len(buttons) == 4
     connect_button = next(b for b in buttons if b.text == "🔗 Подключить Xbox")
     assert connect_button.url is not None
     assert f"start=connect{CHAT_ID}" in connect_button.url
+    steam_button = next(b for b in buttons if b.text == "🎮 Подключить Steam")
+    assert steam_button.url == "https://t.me/mybot?start=connectsteam"
 
 
 async def test_chat_member_presence_orders_playing_first(repo: Repo) -> None:

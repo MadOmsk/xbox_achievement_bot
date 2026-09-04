@@ -486,7 +486,7 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
 HELP_TEXT = (
     "🎮 Слежу за ачивками тех, кто играет на Xbox, и публикую их сюда — "
     "с фильтром по редкости, статистикой каждого и итогом дня.\n\n"
-    "Первый раз здесь — жми «Подключить Xbox».\n"
+    "Первый раз здесь — жми «Подключить Xbox» (или Steam — тоже умею).\n"
     "Уже подключён, но ачивок не видно — жми «Публиковать мои ачивки».\n"
     "Что-то не работает — попробуй подключиться заново.\n\n"
     "Команды чата:\n"
@@ -498,14 +498,17 @@ HELP_TEXT = (
     "/hltb — сколько идти игру (HowLongToBeat)\n\n"
     "/subscribe — публиковать мои ачивки здесь\n"
     "/unsubscribe — перестать\n\n"
-    "Настройки — в личке: редкость, Xbox 360, часовой пояс."
+    "Подключить Steam — /connect_steam <ссылка на профиль>.\n"
+    "Настройки — в личке: редкость, часовой пояс."
 )
 
 
 def hub_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup:
-    """Three buttons, not a control panel: SPEC 6.3 walks through connect →
-    publish in that order, so the keyboard should not offer more choices than
-    that story needs.
+    """A short walkthrough, not a control panel: SPEC 6.3 walks through
+    connect → publish in that order, so the keyboard should not offer more
+    choices than that story needs. Steam's connect button (SPEC 9,
+    M-Steam-2e) sits next to Xbox's rather than adding a whole extra row —
+    it is still the same "connect" step, just a second platform for it.
 
     Buttons act on whoever presses them — that is why "Публиковать мои
     ачивки" is allowed here at all: SPEC 6.3 forbids rendering *someone
@@ -523,6 +526,16 @@ def hub_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup:
                     # (SPEC 6.3) — see _parse_connect_payload in connect.py.
                     url=f"https://t.me/{bot_username}?start=connect{chat_id}",
                 ),
+                InlineKeyboardButton(
+                    text="🎮 Подключить Steam",
+                    # No chat id here (unlike Xbox above) — /connect_steam
+                    # needs a profile link a button tap can't supply anyway,
+                    # so this just opens the DM at the right prompt (SPEC 9,
+                    # handlers/steam.py, connect.py's ?start=connectsteam).
+                    url=f"https://t.me/{bot_username}?start=connectsteam",
+                ),
+            ],
+            [
                 InlineKeyboardButton(
                     text="⚙️ Настройки",
                     url=f"https://t.me/{bot_username}?start=panel",
