@@ -335,13 +335,10 @@ def _card(result: HltbResult) -> str:
         f"Основной + доп. · {fmt(result.extra_hours)}",
         f"Полное прохождение · {fmt(result.completionist_hours)}",
     ]
-    meta = []
     if result.platforms:
-        meta.append(f"Платформы: {html.escape(', '.join(result.platforms))}")
+        lines += ["", f"Платформы: {html.escape(', '.join(result.platforms))}"]
     if result.genre:
-        meta.append(f"Жанры: {html.escape(result.genre)}")
-    if meta:
-        lines += ["", *meta]
+        lines += ["", f"Жанры: {html.escape(result.genre)}"]
     if result.game_url:
         url = html.escape(result.game_url, quote=True)
         lines += ["", f'<a href="{url}">Страница на HowLongToBeat ↗</a>']

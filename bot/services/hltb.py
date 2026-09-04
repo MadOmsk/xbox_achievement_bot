@@ -46,6 +46,24 @@ _NEXT_DATA_RE = re.compile(
 # outright, so "Halo: Reach" still searches as two words, not "HaloReach".
 _SEARCH_NOISE = re.compile(r"[™©®℠:,]")
 
+# A zero-result search retries once, silently, with just the first word that
+# isn't one of these (SPEC 6.6) — "Dishonored Definitive Edition PC" finds
+# nothing on HLTB, "Dishonored" alone does. Only articles/prepositions/
+# pronouns/platform names are skipped when picking that word — an edition
+# qualifier like "definitive" is never checked at all, since the first real
+# word found is kept and everything after it is simply dropped.
+_STOPWORDS = {
+    # articles
+    "a", "an", "the",
+    # prepositions
+    "of", "on", "in", "at", "to", "for", "with", "from", "by",
+    # pronouns
+    "this", "that", "these", "those", "it", "its", "his", "her", "their",
+    # platform names — noise in a title search, not part of the title
+    "pc", "xbox", "playstation", "ps", "ps1", "ps2", "ps3", "ps4", "ps5",
+    "switch", "steam", "windows",
+}
+
 
 class HltbError(Exception):
     """Expected failure — HLTB unreachable, or its layout changed underneath
@@ -72,17 +90,50 @@ async def search(query: str, limit: int = DEFAULT_MAX_RESULTS) -> list[HltbResul
     HLTB title, so the caller always needs to let a person pick (SPEC 6.6).
     `limit` is admin-configurable (`hltb_results_limit`, 6.4) — the caller
     reads the setting, this stays a plain parameter with a sane default."""
-    query = _clean_query(query)
+    cleaned = _clean_query(query)
+    results = await _search_raw(cleaned, limit)
+    if results:
+        return results
+
+    fallback = _pick_fallback_word(cleaned)
+    if fallback is None:
+        return results  # nothing sensible left to retry with — a real "not found"
+
+    try:
+        return await _search_raw(fallback, limit)
+    except HltbError:
+        # The retry failing must not turn what would have been a plain
+        # "nothing found" into a hard error the caller didn't have before.
+        return results
+
+
+async def _search_raw(cleaned_query: str, limit: int) -> list[HltbResult]:
     try:
         # similarity_case_sensitive=False: found live — Xbox's own title
         # names are often ALL CAPS ("HELLDIVERS 2"), and the library's
         # default case-sensitive similarity check threw out the correct
         # match entirely (0 results) rather than just ranking it lower.
-        entries = await HowLongToBeat().async_search(query, similarity_case_sensitive=False)
+        entries = await HowLongToBeat().async_search(
+            cleaned_query, similarity_case_sensitive=False
+        )
     except Exception as exc:  # the library exposes no narrower exception type
-        raise HltbError(f"HLTB search failed for {query!r}: {exc}") from None
+        raise HltbError(f"HLTB search failed for {cleaned_query!r}: {exc}") from None
     entries = sorted(entries or [], key=lambda e: e.similarity, reverse=True)
     return [_as_result(e) for e in entries[:limit]]
+
+
+def _pick_fallback_word(cleaned_query: str) -> str | None:
+    """The already-cleaned query's first word that isn't a stopword — or
+    None if there's nothing worth retrying with (a single-word query would
+    just repeat the same search; an all-stopword query has no good word at
+    all)."""
+    words = cleaned_query.split()
+    if len(words) < 2:
+        return None
+    for word in words:
+        if word.lower() not in _STOPWORDS:
+            return word
+    return None
 
 
 async def resolve(repo: Repo, hltb_id: int) -> HltbResult:

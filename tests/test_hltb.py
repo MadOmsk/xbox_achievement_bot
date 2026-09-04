@@ -8,7 +8,14 @@ import json
 
 from bot.db.repo import HltbCacheRow, Repo, TitleHistoryRow
 from bot.handlers.hltb import _card, _int_setting, _label, _recent_keyboard, _results_keyboard
-from bot.services.hltb import HltbResult, _clean, _clean_query, _extract_genre, _from_cache_row
+from bot.services.hltb import (
+    HltbResult,
+    _clean,
+    _clean_query,
+    _extract_genre,
+    _from_cache_row,
+    _pick_fallback_word,
+)
 
 CHAT_ID = -100777
 
@@ -81,6 +88,26 @@ def test_extract_genre_is_none_when_the_page_has_no_next_data_at_all() -> None:
     assert _extract_genre("<html><body>not the page you're looking for</body></html>") is None
 
 
+def test_pick_fallback_word_takes_the_first_real_word() -> None:
+    # The actual motivating case (SPEC 6.6): HLTB finds nothing for the full
+    # string but does for "Dishonored" alone.
+    assert _pick_fallback_word("Dishonored Definitive Edition PC") == "Dishonored"
+
+
+def test_pick_fallback_word_skips_a_leading_stopword() -> None:
+    assert _pick_fallback_word("The Last of Us") == "Last"
+
+
+def test_pick_fallback_word_is_none_for_a_single_word_query() -> None:
+    # Retrying with the exact same string that already found nothing would
+    # just repeat the failed search.
+    assert _pick_fallback_word("Control") is None
+
+
+def test_pick_fallback_word_is_none_when_every_word_is_a_stopword() -> None:
+    assert _pick_fallback_word("of the it") is None
+
+
 def test_from_cache_row_round_trips() -> None:
     row = HltbCacheRow(
         hltb_id=42,
@@ -142,6 +169,11 @@ def test_card_links_to_the_hltb_page_when_known() -> None:
 def test_card_shows_genre_when_known() -> None:
     text = _card(result())
     assert "Жанры: First-Person, Shooter" in text
+
+
+def test_card_separates_genre_from_platforms_with_a_blank_line() -> None:
+    text = _card(result())
+    assert "Платформы: PC, Xbox Series X/S\n\nЖанры: First-Person, Shooter" in text
 
 
 def test_card_uses_a_dot_separator_not_padding_spaces() -> None:
