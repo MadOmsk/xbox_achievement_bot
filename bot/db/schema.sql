@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS hltb_cache (
     platforms           TEXT NOT NULL DEFAULT '[]',  -- JSON list, HLTB's profile_platforms
     game_url            TEXT,  -- game_web_link — the HLTB page itself
     image_url           TEXT,  -- game_image_url — HLTB's own cover art
+    genre               TEXT,  -- HLTB's own profile_genre, comma-separated as HLTB writes it
     cached_at           TEXT NOT NULL
 );
 

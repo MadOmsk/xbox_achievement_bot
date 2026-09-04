@@ -222,6 +222,7 @@ class HltbCacheRow:
     platforms: list[str] = field(default_factory=list)
     game_url: str | None = None
     image_url: str | None = None
+    genre: str | None = None
 
 
 @dataclass(slots=True)
@@ -1233,7 +1234,7 @@ class Repo:
     async def hltb_get_cached(self, hltb_id: int) -> HltbCacheRow | None:
         cursor = await self._conn.execute(
             "SELECT hltb_id, name, release_year, main_hours, extra_hours,"
-            " completionist_hours, platforms, game_url, image_url "
+            " completionist_hours, platforms, game_url, image_url, genre "
             "FROM hltb_cache WHERE hltb_id = ?",
             (hltb_id,),
         )
@@ -1250,6 +1251,7 @@ class Repo:
             platforms=json.loads(row["platforms"] or "[]"),
             game_url=row["game_url"],
             image_url=row["image_url"],
+            genre=row["genre"],
         )
 
     async def hltb_cache_result(self, entry: HltbCacheRow) -> None:
@@ -1258,8 +1260,8 @@ class Repo:
         await self._conn.execute(
             "INSERT OR REPLACE INTO hltb_cache "
             "(hltb_id, name, release_year, main_hours, extra_hours, completionist_hours,"
-            " platforms, game_url, image_url, cached_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " platforms, game_url, image_url, genre, cached_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 entry.hltb_id,
                 entry.name,
@@ -1270,6 +1272,7 @@ class Repo:
                 json.dumps(entry.platforms),
                 entry.game_url,
                 entry.image_url,
+                entry.genre,
                 utcnow_iso(),
             ),
         )

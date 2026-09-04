@@ -1,9 +1,10 @@
--- Adds `game_url`/`image_url` to hltb_cache: the HLTB page link and cover
--- art for the game card (SPEC 6.6). Rebuilt via a new table and swap, not
--- ALTER TABLE ADD COLUMN, for the same reason as migration 006 — schema.sql
--- already creates hltb_cache with these columns for a brand-new database,
--- and a plain ALTER would collide there. No foreign keys in or out, so no
--- PRAGMA foreign_keys toggle needed around the swap.
+-- Adds `game_url`/`image_url`/`genre` to hltb_cache: the HLTB page link,
+-- cover art, and genre list for the game card (SPEC 6.6). Rebuilt via a new
+-- table and swap, not ALTER TABLE ADD COLUMN, for the same reason as
+-- migration 006 — schema.sql already creates hltb_cache with these columns
+-- for a brand-new database, and a plain ALTER would collide there. No
+-- foreign keys in or out, so no PRAGMA foreign_keys toggle needed around
+-- the swap.
 
 CREATE TABLE hltb_cache_new (
     hltb_id             INTEGER PRIMARY KEY,
@@ -15,6 +16,7 @@ CREATE TABLE hltb_cache_new (
     platforms           TEXT NOT NULL DEFAULT '[]',
     game_url            TEXT,
     image_url           TEXT,
+    genre               TEXT,
     cached_at           TEXT NOT NULL
 );
 

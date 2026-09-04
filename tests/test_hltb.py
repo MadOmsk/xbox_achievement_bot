@@ -4,9 +4,11 @@ howlongtobeatpy calls themselves are out of scope for a unit test."""
 
 from __future__ import annotations
 
+import json
+
 from bot.db.repo import HltbCacheRow, Repo, TitleHistoryRow
 from bot.handlers.hltb import _card, _int_setting, _label, _recent_keyboard, _results_keyboard
-from bot.services.hltb import HltbResult, _clean, _clean_query, _from_cache_row
+from bot.services.hltb import HltbResult, _clean, _clean_query, _extract_genre, _from_cache_row
 
 CHAT_ID = -100777
 
@@ -22,6 +24,7 @@ def result(hltb_id: int = 1, year: int | None = 2021) -> HltbResult:
         platforms=["PC", "Xbox Series X/S"],
         game_url="https://howlongtobeat.com/game/1",
         image_url="https://howlongtobeat.com/games/1_Halo_Infinite.jpg",
+        genre="First-Person, Shooter",
     )
 
 
@@ -53,6 +56,31 @@ def test_clean_query_leaves_an_ordinary_title_untouched() -> None:
     assert _clean_query("Gears of War 3") == "Gears of War 3"
 
 
+def _next_data_page(profile_genre: str | None) -> str:
+    # A stripped-down but structurally real fragment of the game page's own
+    # __NEXT_DATA__ blob (SPEC 6.6) — verified live, same path every time:
+    # props.pageProps.game.data.game[0].profile_genre.
+    game = {"game_name": "Halo Infinite"}
+    if profile_genre is not None:
+        game["profile_genre"] = profile_genre
+    payload = json.dumps({"props": {"pageProps": {"game": {"data": {"game": [game]}}}}})
+    return f'<html><script id="__NEXT_DATA__" type="application/json">{payload}</script></html>'
+
+
+def test_extract_genre_reads_the_next_data_blob() -> None:
+    assert _extract_genre(_next_data_page("First-Person, Open World, Shooter")) == (
+        "First-Person, Open World, Shooter"
+    )
+
+
+def test_extract_genre_is_none_when_the_field_is_missing() -> None:
+    assert _extract_genre(_next_data_page(None)) is None
+
+
+def test_extract_genre_is_none_when_the_page_has_no_next_data_at_all() -> None:
+    assert _extract_genre("<html><body>not the page you're looking for</body></html>") is None
+
+
 def test_from_cache_row_round_trips() -> None:
     row = HltbCacheRow(
         hltb_id=42,
@@ -64,6 +92,7 @@ def test_from_cache_row_round_trips() -> None:
         platforms=["PS5"],
         game_url="https://howlongtobeat.com/game/42",
         image_url="https://howlongtobeat.com/games/42_A_Game.jpg",
+        genre="Adventure, Puzzle",
     )
     r = _from_cache_row(row)
     assert (r.hltb_id, r.name, r.release_year) == (42, "A Game", 2020)
@@ -71,6 +100,7 @@ def test_from_cache_row_round_trips() -> None:
     assert r.platforms == ["PS5"]
     assert r.game_url == "https://howlongtobeat.com/game/42"
     assert r.image_url == "https://howlongtobeat.com/games/42_A_Game.jpg"
+    assert r.genre == "Adventure, Puzzle"
 
 
 def test_label_includes_year_when_known() -> None:
@@ -89,6 +119,7 @@ def test_card_shows_a_dash_for_missing_completion_times() -> None:
         platforms=[],
         game_url=None,
         image_url=None,
+        genre=None,
     )
     text = _card(incomplete)
     assert "Coop Only" in text
@@ -108,6 +139,11 @@ def test_card_links_to_the_hltb_page_when_known() -> None:
     assert '<a href="https://howlongtobeat.com/game/1">' in text
 
 
+def test_card_shows_genre_when_known() -> None:
+    text = _card(result())
+    assert "Жанры: First-Person, Shooter" in text
+
+
 def test_card_uses_a_dot_separator_not_padding_spaces() -> None:
     text = _card(result())
     assert "Основной сюжет · 11.3 ч" in text
@@ -125,11 +161,13 @@ def test_card_escapes_html_in_external_hltb_text() -> None:
         platforms=["A & B"],
         game_url=None,
         image_url=None,
+        genre="Action & <Weird>",
     )
     text = _card(tricky)
     assert "<b>Evil</b> & Co" not in text
     assert "&lt;b&gt;Evil&lt;/b&gt; &amp; Co" in text
     assert "A &amp; B" in text
+    assert "Action &amp; &lt;Weird&gt;" in text
 
 
 def test_results_keyboard_paginates_five_per_page_with_nav() -> None:
