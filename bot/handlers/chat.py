@@ -316,7 +316,7 @@ async def online(message: Message, repo: Repo) -> None:
     # Plain text, no per-name buttons: a keyboard row per player stops being a
     # list and starts being a second keyboard once a chat has more than a
     # few people. Picking someone to look up is /who's job, not this one's.
-    lines = ["🎮 <b>Кто сейчас в игре</b>", ""]
+    lines = ["🎮 <b>Онлайн-статус игроков</b>", ""]
     for row in rows:
         name = row.gamertag or f"id{row.tg_id}"
         lines.append(f"{_presence_icon(row)} {name} — {_presence_text(row)}")

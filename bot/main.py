@@ -237,7 +237,7 @@ async def _publish_command_menu(bot: Bot) -> None:
     ]
     group = [
         BotCommand(command="stats", description="Статистика игрока"),
-        BotCommand(command="online", description="Кто сейчас в игре"),
+        BotCommand(command="online", description="Онлайн-статус игроков"),
         BotCommand(command="who", description="Узнать стату юзера"),
         BotCommand(command="recent", description="Последние ачивки чата"),
         BotCommand(command="summary", description="Сводка за сутки и за месяц"),
