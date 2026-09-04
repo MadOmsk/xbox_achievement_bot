@@ -15,13 +15,11 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from bot.db.repo import AchievementRow, Repo
-from bot.poller.daily import resolve_chat_threshold
 from bot.services.achievements import format_digest, format_single, passes_filters
 
 log = logging.getLogger(__name__)
 
 SEND_INTERVAL_SECONDS = 3.0  # ~20 messages a minute
-DEFAULT_RARE_THRESHOLD = 10.0
 
 
 @dataclass(slots=True)
@@ -65,14 +63,12 @@ class Publisher:
         user_settings = await self._repo.get_user_settings(tg_id)
         if user_settings is None:
             return
-        default_threshold = await self._rare_threshold()
 
         for chat in await self._repo.publication_targets(tg_id):
-            threshold = resolve_chat_threshold(chat.rare_threshold_percent, default_threshold)
             allowed = [
                 item
                 for item in achievements
-                if passes_filters(item, user_settings, chat, threshold)
+                if passes_filters(item, user_settings, chat, chat.rare_threshold_percent)
             ]
             if not allowed:
                 continue
@@ -105,13 +101,6 @@ class Publisher:
                         items=[(item.title_id, item.achievement_id)],
                     )
                 )
-
-    async def _rare_threshold(self) -> float:
-        raw = await self._repo.get_app_setting("rare_threshold_percent")
-        try:
-            return float(raw) if raw is not None else DEFAULT_RARE_THRESHOLD
-        except ValueError:
-            return DEFAULT_RARE_THRESHOLD
 
     async def _run(self) -> None:
         while True:

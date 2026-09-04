@@ -12,6 +12,7 @@ ALL_OFFSETS_HOURS: tuple[int, ...] = tuple(range(-12, 15))
 TZ_SET = "tz:set"
 TZ_MORE = "tz:more"
 TZ_SKIP = "tz:skip"
+TZ_MANUAL = "tz:manual"
 
 
 def format_offset(minutes: int | None) -> str:
@@ -36,6 +37,10 @@ def timezone_keyboard(*, full: bool = False, skippable: bool = True) -> InlineKe
 
     if not full:
         builder.row(InlineKeyboardButton(text="Другой ▸", callback_data=TZ_MORE))
+    # Faster than scrolling the full −12..+14 grid, and the only way to enter
+    # a half-hour offset like +5:30 at all — the button grid only has whole
+    # hours (SPEC 6.1.1).
+    builder.row(InlineKeyboardButton(text="✏️ Ввести вручную", callback_data=TZ_MANUAL))
     if skippable:
         builder.row(InlineKeyboardButton(text="Пропустить", callback_data=TZ_SKIP))
     return builder.as_markup()
@@ -64,11 +69,14 @@ def format_digest(threshold: int) -> str:
 RARITY_CHOICES = ("all", "rare", "hidden")
 
 
-def format_rarity(mode: str, threshold: str | float) -> str:
+def format_rarity(mode: str) -> str:
     if mode == "hidden":
         return "не показывать"
     if mode == "rare":
-        return f"только редкие (≤ {threshold}%)"
+        # No percentage here on purpose: the threshold is per-chat now (SPEC
+        # 5.5), and this panel is not chat-scoped — a single number here
+        # would only ever be right for one of possibly several chats.
+        return "только редкие"
     return "любые"
 
 
@@ -93,7 +101,6 @@ def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMar
 def panel_keyboard(
     tz_offset_min: int | None,
     rarity_mode: str = "all",
-    rare_threshold: str | float = 10,
     show_x360: bool = True,
     digest_threshold: int = 3,
     *,
@@ -115,7 +122,7 @@ def panel_keyboard(
     rows += [
         [
             InlineKeyboardButton(
-                text=f"One/Series/PC: {format_rarity(rarity_mode, rare_threshold)}",
+                text=f"One/Series/PC: {format_rarity(rarity_mode)}",
                 callback_data="panel:rarity",
             )
         ],

@@ -17,7 +17,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
-from bot.services.stats import local_now, offset_minutes_for_zone
+from bot.services.stats import local_now
 from bot.services.tables import render_table, total_line, truncate_name
 from bot.util import thousands, utcnow
 
@@ -51,30 +51,24 @@ class DailySummary:
         self._repo = repo
 
     async def tick(self) -> None:
-        # Global values are only the fallback now — each chat may carry its
-        # own time/zone/threshold in chat_settings (SPEC 5.7), so "is it time
-        # yet" has to be answered separately per chat instead of once for
-        # everyone.
-        default_time = await self._repo.get_app_setting("daily_summary_time", "23:00")
-        default_zone = await self._repo.get_app_setting("timezone", "UTC")
-        default_threshold = await current_rare_threshold(self._repo)
-
+        # Every chat has its own time/zone/threshold in chat_settings (SPEC
+        # 5.7), so "is it time yet" is answered separately per chat, not once
+        # for everyone.
         for chat in await self._repo.admin_chats():
             if not chat.is_active or not chat.daily_summary:
                 continue
 
-            target = chat.daily_summary_time or default_time
-            zone = chat.timezone or default_zone
-            now_local = local_now(offset_minutes_for_zone(zone))
-            if now_local.strftime("%H:%M") != target:
+            now_local = local_now(chat.tz_offset_min)
+            if now_local.strftime("%H:%M") != chat.daily_summary_time:
                 continue
 
             report_date = now_local.date().isoformat()
             if await self._repo.daily_report_sent(chat.chat_id, report_date):
                 continue
 
-            threshold = resolve_chat_threshold(chat.rare_threshold_percent, default_threshold)
-            built = await build_summary(self._repo, chat.chat_id, threshold, now_local.date())
+            built = await build_summary(
+                self._repo, chat.chat_id, chat.rare_threshold_percent, now_local.date()
+            )
             if built is None:
                 # Nobody unlocked anything: staying silent keeps the summary
                 # meaningful instead of turning it into daily noise (SPEC 5.7).
@@ -94,22 +88,6 @@ class DailySummary:
                 log.exception("could not send the daily summary to %s", chat.chat_id)
                 continue
             await self._repo.mark_daily_report_sent(chat.chat_id, report_date)
-
-
-async def current_rare_threshold(repo: Repo) -> float:
-    raw = await repo.get_app_setting("rare_threshold_percent", "10")
-    try:
-        return float(raw or 10)
-    except ValueError:
-        return 10.0
-
-
-def resolve_chat_threshold(override: float | None, default_threshold: float) -> float:
-    """A chat's own override wins over the global default (SPEC 5.5); NULL
-    means it never set one, not that it wants a threshold of 0. Takes the raw
-    value rather than a ChatTarget so it works equally for the lighter-weight
-    ChatOverride fetched by /summary."""
-    return override if override is not None else default_threshold
 
 
 async def current_top_limit(repo: Repo) -> int:

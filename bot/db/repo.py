@@ -24,15 +24,15 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
 DEFAULT_APP_SETTINGS: dict[str, str] = {
-    "rare_threshold_percent": "10",
-    "daily_summary_time": "23:00",
     # Row caps for the game/player tables (SPEC 6.3, 6.6, 7.2) — separate
     # settings because they cap different things: players in /summary's
-    # leaderboard, games in /stats' "Игры за 30 дней", games offered as
-    # one-tap shortcuts in /hltb.
+    # leaderboard, games in /stats' "Игры за 30 дней".
     "summary_top_limit": "15",
     "stats_games_limit": "15",
-    "hltb_recent_games_limit": "20",
+    # /hltb's own two: how many candidates search() and the recent-games
+    # shortcuts pool from, and how many of them show per page (6.4, 6.6).
+    "hltb_results_limit": "20",
+    "hltb_page_size": "5",
 }
 
 
@@ -100,15 +100,13 @@ class AchievementRow:
 class ChatTarget:
     chat_id: int
     title: str | None
-    rarity_mode: str
     min_gamerscore: int
     muted_title_ids: list[str]
-    # NULL = no override, follow the matching app_settings default (SPEC 5.5,
-    # 5.7) — raw, unresolved values; callers resolve against the global
-    # default themselves, same as everywhere else a setting can be NULL.
-    rare_threshold_percent: float | None = None
-    daily_summary_time: str | None = None
-    timezone: str | None = None
+    # Always explicit per chat, no shared fallback (SPEC 5.5, 5.7) — every
+    # chat gets a real value the moment it's created.
+    rare_threshold_percent: float
+    daily_summary_time: str
+    tz_offset_min: int
     # Filled in by the admin panel only; the publisher never looks at them.
     is_active: bool = True
     daily_summary: bool = True
@@ -116,14 +114,14 @@ class ChatTarget:
 
 
 @dataclass(slots=True)
-class ChatOverride:
-    """The same three per-chat overrides as on `ChatTarget`, fetched alone
-    for call sites (chat.py's /summary) that have a chat_id but no reason to
-    pull the rest of the chat/subscriber JOIN."""
+class ChatDailySettings:
+    """The same three per-chat values as on `ChatTarget`, fetched alone for
+    call sites (chat.py's /summary) that have a chat_id but no reason to pull
+    the rest of the chat/subscriber JOIN."""
 
-    rare_threshold_percent: float | None
-    daily_summary_time: str | None
-    timezone: str | None
+    rare_threshold_percent: float
+    daily_summary_time: str
+    tz_offset_min: int
 
 
 @dataclass(slots=True)
@@ -701,8 +699,8 @@ class Repo:
 
     async def publication_targets(self, tg_id: int) -> list[ChatTarget]:
         cursor = await self._conn.execute(
-            "SELECT c.chat_id, c.title, s.rarity_mode, s.min_gamerscore, s.muted_title_ids,"
-            "       s.rare_threshold_percent "
+            "SELECT c.chat_id, c.title, s.min_gamerscore, s.muted_title_ids,"
+            "       s.rare_threshold_percent, s.daily_summary_time, s.tz_offset_min "
             "FROM subscriptions sub "
             "JOIN chats c ON c.chat_id = sub.chat_id "
             "JOIN chat_settings s ON s.chat_id = c.chat_id "
@@ -713,27 +711,31 @@ class Repo:
             ChatTarget(
                 chat_id=row["chat_id"],
                 title=row["title"],
-                rarity_mode=row["rarity_mode"],
                 min_gamerscore=row["min_gamerscore"],
                 muted_title_ids=json.loads(row["muted_title_ids"] or "[]"),
                 rare_threshold_percent=row["rare_threshold_percent"],
+                daily_summary_time=row["daily_summary_time"],
+                tz_offset_min=row["tz_offset_min"],
             )
             for row in await cursor.fetchall()
         ]
 
-    async def get_chat_overrides(self, chat_id: int) -> ChatOverride:
+    async def get_chat_daily_settings(self, chat_id: int) -> ChatDailySettings:
         cursor = await self._conn.execute(
-            "SELECT rare_threshold_percent, daily_summary_time, timezone "
+            "SELECT rare_threshold_percent, daily_summary_time, tz_offset_min "
             "FROM chat_settings WHERE chat_id = ?",
             (chat_id,),
         )
         row = await cursor.fetchone()
         if row is None:
-            return ChatOverride(None, None, None)
-        return ChatOverride(
+            # A chat with no chat_settings row at all — should not happen
+            # (every chat gets one via upsert_chat), the hardcoded defaults
+            # are the same ones a brand new row would carry.
+            return ChatDailySettings(10.0, "20:00", 180)
+        return ChatDailySettings(
             rare_threshold_percent=row["rare_threshold_percent"],
             daily_summary_time=row["daily_summary_time"],
-            timezone=row["timezone"],
+            tz_offset_min=row["tz_offset_min"],
         )
 
     # --------------------------------------------------------- title history
@@ -1104,9 +1106,9 @@ class Repo:
 
     async def admin_chats(self) -> list[ChatTarget]:
         cursor = await self._conn.execute(
-            "SELECT c.chat_id, c.title, c.is_active, s.rarity_mode, s.min_gamerscore,"
+            "SELECT c.chat_id, c.title, c.is_active, s.min_gamerscore,"
             "       s.daily_summary, s.muted_title_ids, s.rare_threshold_percent,"
-            "       s.daily_summary_time, s.timezone,"
+            "       s.daily_summary_time, s.tz_offset_min,"
             "       (SELECT COUNT(*) FROM subscriptions WHERE chat_id = c.chat_id) AS subs "
             "FROM chats c JOIN chat_settings s ON s.chat_id = c.chat_id "
             "ORDER BY c.is_active DESC, c.title"
@@ -1115,12 +1117,11 @@ class Repo:
             ChatTarget(
                 chat_id=row["chat_id"],
                 title=row["title"],
-                rarity_mode=row["rarity_mode"],
                 min_gamerscore=row["min_gamerscore"],
                 muted_title_ids=json.loads(row["muted_title_ids"] or "[]"),
                 rare_threshold_percent=row["rare_threshold_percent"],
                 daily_summary_time=row["daily_summary_time"],
-                timezone=row["timezone"],
+                tz_offset_min=row["tz_offset_min"],
                 is_active=bool(row["is_active"]),
                 daily_summary=bool(row["daily_summary"]),
                 subscribers=int(row["subs"]),
@@ -1130,12 +1131,11 @@ class Repo:
 
     async def update_chat_settings(self, chat_id: int, **fields: Any) -> None:
         allowed = {
-            "rarity_mode",
             "min_gamerscore",
             "daily_summary",
             "rare_threshold_percent",
             "daily_summary_time",
-            "timezone",
+            "tz_offset_min",
         }
         unknown = set(fields) - allowed
         if unknown:

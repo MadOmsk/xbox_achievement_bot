@@ -33,8 +33,8 @@ log = logging.getLogger(__name__)
 
 router = Router(name="hltb")
 
-PAGE_SIZE = 5
-DEFAULT_RECENT_GAMES_LIMIT = "20"
+DEFAULT_RESULTS_LIMIT = "20"
+DEFAULT_PAGE_SIZE = "5"
 # Generous — the reply-to-message check is the real guard against a stray
 # match, this is just a backstop against sessions piling up forever.
 SESSION_TTL_SECONDS = 1800
@@ -51,6 +51,8 @@ RESULTS_PROMPT = "Что из этого совпадает с твоей игр
 class _Session:
     asker_tg_id: int
     started_at: float
+    page_size: int
+    results_limit: int
     prompt_text: str = ""
     recent_games: list[str] = field(default_factory=list)
     recent_page: int = 0
@@ -71,7 +73,8 @@ async def hltb_command(message: Message, repo: Repo) -> None:
         return
     # Only meaningful in a group: a DM's chat_id is the asker's own tg_id,
     # which never has subscriptions/chat_seen rows of its own.
-    limit = await _recent_games_limit(repo)
+    limit = await _int_setting(repo, "hltb_results_limit", DEFAULT_RESULTS_LIMIT)
+    page_size = await _int_setting(repo, "hltb_page_size", DEFAULT_PAGE_SIZE)
     recent = await repo.chat_recent_games(message.chat.id, limit)
 
     text = "Название игры? Точное не нужно — покажу варианты."
@@ -80,21 +83,23 @@ async def hltb_command(message: Message, repo: Repo) -> None:
     else:
         text += "\nОтветь на это сообщение (реплаем)."
 
-    prompt = await message.answer(text, reply_markup=_recent_keyboard(recent, 0))
+    prompt = await message.answer(text, reply_markup=_recent_keyboard(recent, 0, page_size))
     _sessions[(message.chat.id, prompt.message_id)] = _Session(
         asker_tg_id=message.from_user.id,
         started_at=time.monotonic(),
+        page_size=page_size,
+        results_limit=limit,
         prompt_text=text,
         recent_games=recent,
     )
 
 
-async def _recent_games_limit(repo: Repo) -> int:
-    raw = await repo.get_app_setting("hltb_recent_games_limit", DEFAULT_RECENT_GAMES_LIMIT)
+async def _int_setting(repo: Repo, key: str, default: str) -> int:
+    raw = await repo.get_app_setting(key, default)
     try:
-        return int(raw or DEFAULT_RECENT_GAMES_LIMIT)
+        return int(raw or default)
     except ValueError:
-        return int(DEFAULT_RECENT_GAMES_LIMIT)
+        return int(default)
 
 
 def _nav_row(page: int, pages: int, page_prefix: str) -> list[InlineKeyboardButton]:
@@ -113,14 +118,14 @@ def _cancel_row() -> list[InlineKeyboardButton]:
     return [InlineKeyboardButton(text="❌ Отмена", callback_data="hltb:cancel")]
 
 
-def _recent_keyboard(names: list[str], page: int) -> InlineKeyboardMarkup:
-    start = page * PAGE_SIZE
-    chunk = names[start : start + PAGE_SIZE]
+def _recent_keyboard(names: list[str], page: int, page_size: int) -> InlineKeyboardMarkup:
+    start = page * page_size
+    chunk = names[start : start + page_size]
     rows = [
         [InlineKeyboardButton(text=name, callback_data=f"hltb:qr:{start + i}")]
         for i, name in enumerate(chunk)
     ]
-    pages = -(-len(names) // PAGE_SIZE)
+    pages = -(-len(names) // page_size)
     if pages > 1:
         rows.append(_nav_row(page, pages, "hltb:rpage:"))
     rows.append(_cancel_row())
@@ -139,7 +144,7 @@ async def hltb_recent_page(callback: CallbackQuery, bot: Bot) -> None:
     assert callback.data is not None
     session.recent_page = int(callback.data.rsplit(":", 1)[1])
     await callback.answer()
-    markup = _recent_keyboard(session.recent_games, session.recent_page)
+    markup = _recent_keyboard(session.recent_games, session.recent_page, session.page_size)
     await _edit(bot, key[0], key[1], session.prompt_text, markup)
 
 
@@ -189,7 +194,7 @@ async def _run_search(
     bot: Bot, chat_id: int, message_id: int, session: _Session, query: str
 ) -> None:
     try:
-        results = await search(query)
+        results = await search(query, limit=session.results_limit)
     except HltbError:
         log.info("HLTB search failed for %r", query)
         await _edit(bot, chat_id, message_id, UNAVAILABLE, None)
@@ -203,18 +208,19 @@ async def _run_search(
 
     session.results = results
     session.page = 0
-    await _edit(bot, chat_id, message_id, RESULTS_PROMPT, _results_keyboard(results, 0))
+    markup = _results_keyboard(results, 0, session.page_size)
+    await _edit(bot, chat_id, message_id, RESULTS_PROMPT, markup)
 
 
-def _results_keyboard(results: list[HltbResult], page: int) -> InlineKeyboardMarkup:
-    start = page * PAGE_SIZE
-    chunk = results[start : start + PAGE_SIZE]
+def _results_keyboard(results: list[HltbResult], page: int, page_size: int) -> InlineKeyboardMarkup:
+    start = page * page_size
+    chunk = results[start : start + page_size]
     rows = [
         [InlineKeyboardButton(text=_label(r), callback_data=f"hltb:pick:{r.hltb_id}")]
         for r in chunk
     ]
 
-    pages = -(-len(results) // PAGE_SIZE)
+    pages = -(-len(results) // page_size)
     if pages > 1:
         rows.append(_nav_row(page, pages, "hltb:page:"))
     rows.append(_cancel_row())
@@ -258,7 +264,7 @@ async def hltb_page(callback: CallbackQuery, bot: Bot) -> None:
     assert callback.data is not None
     session.page = int(callback.data.rsplit(":", 1)[1])
     await callback.answer()
-    markup = _results_keyboard(session.results, session.page)
+    markup = _results_keyboard(session.results, session.page, session.page_size)
     await _edit(bot, key[0], key[1], RESULTS_PROMPT, markup)
 
 

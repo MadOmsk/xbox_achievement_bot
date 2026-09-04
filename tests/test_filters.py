@@ -40,13 +40,15 @@ def user(rarity_mode: str = "all", show_x360: bool = True) -> UserSettings:
     )
 
 
-def chat(rarity_mode: str = "all", min_gamerscore: int = 0, muted: list[str] | None = None):
+def chat(min_gamerscore: int = 0, muted: list[str] | None = None) -> ChatTarget:
     return ChatTarget(
         chat_id=-100,
         title="Гейминг-чат",
-        rarity_mode=rarity_mode,
         min_gamerscore=min_gamerscore,
         muted_title_ids=muted or [],
+        rare_threshold_percent=10.0,
+        daily_summary_time="20:00",
+        tz_offset_min=180,
     )
 
 
@@ -54,10 +56,10 @@ def chat(rarity_mode: str = "all", min_gamerscore: int = 0, muted: list[str] | N
     ("threshold", "rarity", "expected"),
     [(10.0, 2.4, True), (10.0, 10.0, True), (10.0, 10.1, False), (20.0, 15.0, True)],
 )
-def test_rarity_threshold_is_the_admin_setting(
+def test_rarity_threshold_is_the_chat_setting(
     threshold: float, rarity: float, expected: bool
 ) -> None:
-    """The 10% is a default, never a constant in the code (SPEC 1.4)."""
+    """The 10% is a per-chat default, never a constant in the code (SPEC 1.4, 5.5)."""
     assert passes_filters(achievement(rarity), user("rare"), chat(), threshold) is expected
 
 
@@ -65,7 +67,7 @@ def test_x360_passes_rare_mode_when_the_switch_is_on() -> None:
     """Rarity is unknown for Xbox 360, not "too common" — a filter it has no
     data for must not silently hide it (SPEC 5.5)."""
     item = achievement(rarity=None, platform="x360")
-    assert passes_filters(item, user("rare", show_x360=True), chat("rare"), 10.0) is True
+    assert passes_filters(item, user("rare", show_x360=True), chat(), 10.0) is True
 
 
 def test_x360_switch_off_hides_it_regardless_of_rarity_mode() -> None:
@@ -74,11 +76,10 @@ def test_x360_switch_off_hides_it_regardless_of_rarity_mode() -> None:
 
 
 def test_hidden_mode_hides_modern_achievements_entirely() -> None:
-    """The One/Series/PC counterpart of show_x360=0 — the modern feed off,
-    independent of what the chat's own rarity setting allows."""
+    """The One/Series/PC counterpart of show_x360=0 — the modern feed off
+    entirely regardless of the chat's threshold."""
     item = achievement(rarity=30.0)
-    assert passes_filters(item, user("hidden"), chat("all"), 10.0) is False
-    assert passes_filters(item, user("hidden"), chat("rare"), 10.0) is False
+    assert passes_filters(item, user("hidden"), chat(), 10.0) is False
 
 
 def test_hidden_mode_does_not_touch_x360() -> None:
@@ -89,11 +90,12 @@ def test_hidden_mode_does_not_touch_x360() -> None:
     assert passes_filters(item, user("hidden", show_x360=False), chat(), 10.0) is False
 
 
-def test_chat_and_user_settings_are_combined_with_and() -> None:
+def test_rarity_mode_is_the_users_own_choice_only() -> None:
+    """A chat has no rarity_mode of its own any more (SPEC 5.5) — only the
+    person's own choice decides, regardless of the chat's threshold number."""
     item = achievement(rarity=30.0)
-    assert passes_filters(item, user("all"), chat("rare"), 10.0) is False
-    assert passes_filters(item, user("rare"), chat("all"), 10.0) is False
-    assert passes_filters(item, user("all"), chat("all"), 10.0) is True
+    assert passes_filters(item, user("all"), chat(), 10.0) is True
+    assert passes_filters(item, user("rare"), chat(), 10.0) is False  # 30% > 10% threshold
 
 
 def test_min_gamerscore_and_mute() -> None:

@@ -15,7 +15,7 @@ from howlongtobeatpy import HowLongToBeat
 
 from bot.db.repo import HltbCacheRow, Repo
 
-MAX_RESULTS = 20
+DEFAULT_MAX_RESULTS = 20
 
 # Xbox's own title names carry trademark clutter and separator punctuation
 # HLTB's search doesn't expect — e.g. a chat-recent-games shortcut hands over
@@ -41,10 +41,11 @@ class HltbResult:
     platforms: list[str]
 
 
-async def search(query: str) -> list[HltbResult]:
-    """Up to MAX_RESULTS candidates, best match first — nobody types an
-    exact HLTB title, so the caller always needs to let a person pick
-    (SPEC 6.6)."""
+async def search(query: str, limit: int = DEFAULT_MAX_RESULTS) -> list[HltbResult]:
+    """Up to `limit` candidates, best match first — nobody types an exact
+    HLTB title, so the caller always needs to let a person pick (SPEC 6.6).
+    `limit` is admin-configurable (`hltb_results_limit`, 6.4) — the caller
+    reads the setting, this stays a plain parameter with a sane default."""
     query = _clean_query(query)
     try:
         # similarity_case_sensitive=False: found live — Xbox's own title
@@ -55,7 +56,7 @@ async def search(query: str) -> list[HltbResult]:
     except Exception as exc:  # the library exposes no narrower exception type
         raise HltbError(f"HLTB search failed for {query!r}: {exc}") from None
     entries = sorted(entries or [], key=lambda e: e.similarity, reverse=True)
-    return [_as_result(e) for e in entries[:MAX_RESULTS]]
+    return [_as_result(e) for e in entries[:limit]]
 
 
 async def resolve(repo: Repo, hltb_id: int) -> HltbResult:

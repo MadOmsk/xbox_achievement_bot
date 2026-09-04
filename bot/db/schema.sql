@@ -70,25 +70,29 @@ CREATE TABLE IF NOT EXISTS user_settings (
     tz_offset_min    INTEGER                       -- minutes from UTC, NULL = global timezone
 );
 
+-- Rare-achievement threshold, daily-summary time and its timezone are always
+-- explicit per chat (SPEC 5.5, 5.7) — briefly shared via app_settings with a
+-- NULL-means-"follow the global value" fallback, reverted once real multi-
+-- chat use showed chats want genuinely different values, not one shared
+-- knob that moves every chat at once on every edit. No chat-level rarity
+-- mode column either — that used to gate publication alongside the user's
+-- own choice (an AND of the two), dropped as redundant: the user's own
+-- rarity_mode already decides this, the chat only supplies the threshold
+-- number for what "rare" means when someone picks it.
 CREATE TABLE IF NOT EXISTS chat_settings (
     chat_id                INTEGER PRIMARY KEY REFERENCES chats(chat_id) ON DELETE CASCADE,
-    rarity_mode            TEXT    NOT NULL DEFAULT 'all'
-                           CHECK (rarity_mode IN ('all', 'rare')),
-    min_gamerscore         INTEGER NOT NULL DEFAULT 0,
-    daily_summary          INTEGER NOT NULL DEFAULT 1,
-    muted_title_ids        TEXT    NOT NULL DEFAULT '[]',
-    -- Per-chat override of the matching app_settings default (SPEC 5.5, 5.7).
-    -- NULL means "follow the global value", resolved at read time, not
-    -- copied in at chat-creation time — a later change to the global default
-    -- must reach every chat without its own override immediately.
-    rare_threshold_percent REAL,
-    daily_summary_time     TEXT,
-    timezone                TEXT
+    min_gamerscore          INTEGER NOT NULL DEFAULT 0,
+    daily_summary           INTEGER NOT NULL DEFAULT 1,
+    muted_title_ids         TEXT    NOT NULL DEFAULT '[]',
+    rare_threshold_percent  REAL    NOT NULL DEFAULT 10,
+    daily_summary_time      TEXT    NOT NULL DEFAULT '20:00',
+    -- Offset, not a zone name — same reasoning as user_settings.tz_offset_min:
+    -- unambiguous, and Russia has had no DST since 2014 so a fixed offset
+    -- never drifts for this audience.
+    tz_offset_min            INTEGER NOT NULL DEFAULT 180
 );
 
--- Global settings the admin turns: rare_threshold_percent, daily_summary_time,
--- timezone — also the fallback for chats with no override of their own
--- (chat_settings' three nullable columns above)
+-- Global settings the admin turns
 CREATE TABLE IF NOT EXISTS app_settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

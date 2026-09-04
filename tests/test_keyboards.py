@@ -41,5 +41,5 @@ def test_needs_reconnect_adds_a_button_without_hiding_settings() -> None:
 
 
 def test_connected_keyboard_offers_disconnect() -> None:
-    markup = panel_keyboard(180, "rare", 10, True, 3, connected=True)
+    markup = panel_keyboard(180, "rare", True, 3, connected=True)
     assert "panel:disconnect" in _callback_data(markup)

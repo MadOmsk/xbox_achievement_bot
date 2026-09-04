@@ -29,10 +29,13 @@ def passes_filters(
     chat: ChatTarget,
     rare_threshold: float,
 ) -> bool:
-    """AND of the user's settings and the chat's — the stricter one wins.
+    """The user's own rarity choice, plus the chat's own spam guards.
 
-    The chat protects itself from spam, the person protects himself from his
-    own noise, and neither can loosen what the other tightened.
+    Rarity mode (all/rare/hidden) is the user's call alone — the chat only
+    supplies the number that decides what "rare" means for it (SPEC 5.5); a
+    chat-level rarity toggle used to gate this too, dropped once it turned
+    out redundant with the user's own choice and just added a second switch
+    people had to find and agree on.
     """
     if achievement.platform == "x360":
         # Xbox 360 has no rarity data at all — visibility is decided solely by
@@ -41,12 +44,10 @@ def passes_filters(
 
     if user.rarity_mode == "hidden":
         # The One/Series/PC counterpart of show_x360=0: the modern feed off
-        # entirely, independent of the chat's own rarity setting.
+        # entirely.
         return False
 
     if not _passes_rarity(achievement, user.rarity_mode, rare_threshold):
-        return False
-    if not _passes_rarity(achievement, chat.rarity_mode, rare_threshold):
         return False
 
     if achievement.gamerscore < chat.min_gamerscore:

@@ -6,11 +6,13 @@ import contextlib
 import logging
 
 from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.db.repo import Repo
 from bot.handlers.keyboards import (
+    TZ_MANUAL,
     TZ_MORE,
     TZ_SET,
     TZ_SKIP,
@@ -21,6 +23,7 @@ from bot.handlers.keyboards import (
 from bot.handlers.panel import render_panel
 from bot.services.connect import ConnectService
 from bot.services.notify import AdminNotifier
+from bot.util import parse_utc_offset
 
 log = logging.getLogger(__name__)
 
@@ -35,11 +38,7 @@ GREETING = (
     "Начнём со входа через Microsoft."
 )
 
-TIMEZONE_PROMPT = (
-    "🕐 Твой часовой пояс?\n\n"
-    "Нужен, чтобы «сегодня» и «за месяц» считались по твоему времени, "
-    "а не по времени сервера."
-)
+TIMEZONE_PROMPT = "🕐 Твой часовой пояс?"
 
 REVOKE_URL = "https://account.live.com/consent/Manage"
 
@@ -182,7 +181,7 @@ async def timezone_full_list(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == TZ_SKIP)
 async def timezone_skip(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
-        await callback.message.edit_text("Хорошо, оставил общий часовой пояс. Поменять — в /panel.")
+        await callback.message.edit_text("Хорошо, пропустил. Поменять — в /panel.")
     await callback.answer()
 
 
@@ -192,12 +191,52 @@ async def timezone_set(callback: CallbackQuery, repo: Repo) -> None:
     minutes = int(callback.data.rsplit(":", 1)[1])
     await repo.ensure_user(callback.from_user.id, callback.from_user.username)
     await repo.update_user_settings(callback.from_user.id, tz_offset_min=minutes)
+    _awaiting_manual_tz.pop(callback.from_user.id, None)
 
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             f"Часовой пояс: {format_offset(minutes)}. Поменять можно в /panel."
         )
     await callback.answer()
+
+
+# tg_id -> id of the prompt message to restore on a bad reply. Module-level
+# and in-memory, same as admin.py's _awaiting_input — losing it on a restart
+# just means asking again, nothing worth persisting to disk for.
+_awaiting_manual_tz: dict[int, int] = {}
+
+MANUAL_TZ_HINT = "Пришли смещение одним сообщением, со знаком: например +3, -5 или +5:30."
+
+
+@router.callback_query(F.data == TZ_MANUAL)
+async def timezone_manual_prompt(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        _awaiting_manual_tz[callback.from_user.id] = callback.message.message_id
+        await callback.message.edit_text(MANUAL_TZ_HINT)
+    await callback.answer()
+
+
+# A mandatory sign, unlike parse_utc_offset itself: admin.py's own numeric
+# flow (rare threshold, row limits) accepts bare unsigned numbers in the same
+# private chat, and a bare "3" must not be ambiguous between the two.
+@router.message(
+    F.chat.type == ChatType.PRIVATE, F.text.regexp(r"(?i)^(?:utc)?\s*[+-]\d{1,2}(?::[0-5]\d)?$")
+)
+async def timezone_manual_input(message: Message, repo: Repo) -> None:
+    assert message.from_user is not None and message.text is not None
+    prompt_id = _awaiting_manual_tz.pop(message.from_user.id, None)
+    if prompt_id is None:
+        return  # a stray signed number from someone not in this flow — ignore
+
+    minutes = parse_utc_offset(message.text)
+    if minutes is None:  # out of −12..+14 range — the regex alone can't catch that
+        _awaiting_manual_tz[message.from_user.id] = prompt_id
+        await message.answer(f"Это не похоже на реальный часовой пояс. {MANUAL_TZ_HINT}")
+        return
+
+    await repo.ensure_user(message.from_user.id, message.from_user.username)
+    await repo.update_user_settings(message.from_user.id, tz_offset_min=minutes)
+    await message.answer(f"Часовой пояс: {format_offset(minutes)}. Поменять можно в /panel.")
 
 
 async def _greet(message: Message, repo: Repo, connect: ConnectService) -> None:

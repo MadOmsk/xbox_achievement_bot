@@ -5,13 +5,7 @@ howlongtobeatpy calls themselves are out of scope for a unit test."""
 from __future__ import annotations
 
 from bot.db.repo import HltbCacheRow, Repo, TitleHistoryRow
-from bot.handlers.hltb import (
-    _card,
-    _label,
-    _recent_games_limit,
-    _recent_keyboard,
-    _results_keyboard,
-)
+from bot.handlers.hltb import _card, _int_setting, _label, _recent_keyboard, _results_keyboard
 from bot.services.hltb import HltbResult, _clean, _clean_query, _from_cache_row
 
 CHAT_ID = -100777
@@ -103,19 +97,19 @@ def test_card_lists_platforms_when_known() -> None:
 def test_results_keyboard_paginates_five_per_page_with_nav() -> None:
     results = [result(hltb_id=i) for i in range(1, 13)]  # 12 -> 3 pages
 
-    page0 = _results_keyboard(results, 0)
+    page0 = _results_keyboard(results, 0, 5)
     assert len(page0.inline_keyboard) == 7  # 5 picks + one nav row + cancel
     assert page0.inline_keyboard[-1][0].callback_data == "hltb:cancel"
     nav0 = page0.inline_keyboard[-2]
     assert [b.callback_data for b in nav0] == ["hltb:noop", "hltb:page:1"]  # no "back" on page 0
     assert nav0[0].text == "1/3"  # the page counter's label, not its (inert) callback_data
 
-    page1 = _results_keyboard(results, 1)
+    page1 = _results_keyboard(results, 1, 5)
     nav1 = page1.inline_keyboard[-2]
     assert [b.callback_data for b in nav1] == ["hltb:page:0", "hltb:noop", "hltb:page:2"]
     assert nav1[1].text == "2/3"
 
-    page2 = _results_keyboard(results, 2)
+    page2 = _results_keyboard(results, 2, 5)
     assert len(page2.inline_keyboard) == 4  # 2 leftover picks + nav + cancel
     nav2 = page2.inline_keyboard[-2]
     # no "forward" button on the last page
@@ -124,7 +118,7 @@ def test_results_keyboard_paginates_five_per_page_with_nav() -> None:
 
 def test_results_keyboard_has_no_nav_row_for_a_single_page() -> None:
     results = [result(hltb_id=i) for i in range(1, 4)]
-    markup = _results_keyboard(results, 0)
+    markup = _results_keyboard(results, 0, 5)
     assert len(markup.inline_keyboard) == 4  # 3 picks + cancel, no nav
     picks, cancel = markup.inline_keyboard[:3], markup.inline_keyboard[3]
     assert all(row[0].callback_data.startswith("hltb:pick:") for row in picks)
@@ -132,9 +126,19 @@ def test_results_keyboard_has_no_nav_row_for_a_single_page() -> None:
 
 
 def test_every_keyboard_offers_a_cancel_button() -> None:
-    assert _results_keyboard([result()], 0).inline_keyboard[-1][0].callback_data == "hltb:cancel"
-    assert _recent_keyboard(["A"], 0).inline_keyboard[-1][0].callback_data == "hltb:cancel"
-    assert _recent_keyboard([], 0).inline_keyboard[-1][0].callback_data == "hltb:cancel"
+    assert _results_keyboard([result()], 0, 5).inline_keyboard[-1][0].callback_data == "hltb:cancel"
+    assert _recent_keyboard(["A"], 0, 5).inline_keyboard[-1][0].callback_data == "hltb:cancel"
+    assert _recent_keyboard([], 0, 5).inline_keyboard[-1][0].callback_data == "hltb:cancel"
+
+
+def test_results_keyboard_respects_a_custom_page_size() -> None:
+    """The admin-configurable hltb_page_size (SPEC 6.4, 6.6) changes how many
+    results/hints show per page, for both keyboards."""
+    results = [result(hltb_id=i) for i in range(1, 5)]  # 4 results, page_size=2 -> 2 pages
+    page0 = _results_keyboard(results, 0, 2)
+    assert len(page0.inline_keyboard) == 4  # 2 picks + nav + cancel
+    nav0 = page0.inline_keyboard[-2]
+    assert nav0[0].text == "1/2"
 
 
 def test_recent_keyboard_paginates_with_absolute_indices() -> None:
@@ -142,14 +146,14 @@ def test_recent_keyboard_paginates_with_absolute_indices() -> None:
     looks games up by index into the *full* list, not the current page."""
     names = [f"Game {i}" for i in range(12)]  # 3 pages of 5
 
-    page0 = _recent_keyboard(names, 0)
+    page0 = _recent_keyboard(names, 0, 5)
     assert [row[0].callback_data for row in page0.inline_keyboard[:5]] == [
         f"hltb:qr:{i}" for i in range(5)
     ]
     nav0 = page0.inline_keyboard[-2]
     assert [b.callback_data for b in nav0] == ["hltb:noop", "hltb:rpage:1"]
 
-    page2 = _recent_keyboard(names, 2)
+    page2 = _recent_keyboard(names, 2, 5)
     assert [row[0].callback_data for row in page2.inline_keyboard[:2]] == [
         "hltb:qr:10",
         "hltb:qr:11",
@@ -159,14 +163,18 @@ def test_recent_keyboard_paginates_with_absolute_indices() -> None:
 
 
 def test_recent_keyboard_has_no_nav_row_for_a_single_page() -> None:
-    markup = _recent_keyboard(["A", "B"], 0)
+    markup = _recent_keyboard(["A", "B"], 0, 5)
     assert len(markup.inline_keyboard) == 3  # 2 games + cancel, no nav
 
 
-async def test_recent_games_limit_is_admin_configurable(repo: Repo) -> None:
-    assert await _recent_games_limit(repo) == 20  # default
-    await repo.set_app_setting("hltb_recent_games_limit", "7")
-    assert await _recent_games_limit(repo) == 7
+async def test_hltb_limits_are_admin_configurable(repo: Repo) -> None:
+    assert await _int_setting(repo, "hltb_results_limit", "20") == 20  # default
+    await repo.set_app_setting("hltb_results_limit", "7")
+    assert await _int_setting(repo, "hltb_results_limit", "20") == 7
+
+    assert await _int_setting(repo, "hltb_page_size", "5") == 5  # default
+    await repo.set_app_setting("hltb_page_size", "3")
+    assert await _int_setting(repo, "hltb_page_size", "5") == 3
 
 
 async def test_hltb_cache_round_trip(repo: Repo) -> None:

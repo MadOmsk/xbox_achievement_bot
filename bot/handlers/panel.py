@@ -218,7 +218,6 @@ RECENT_IN_PANEL = 5
 async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     user = await repo.get_user(tg_id)
     settings_row = await repo.get_user_settings(tg_id)
-    threshold = await repo.get_app_setting("rare_threshold_percent", "10")
     connected = user is not None and bool(user.xuid)
     steam_link = await repo.get_platform_link(tg_id, "steam")
 
@@ -228,7 +227,6 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     keyboard = panel_keyboard(
         tz_offset,
         settings_row.rarity_mode if settings_row else "all",
-        threshold or "10",
         settings_row.show_x360 if settings_row else True,
         settings_row.digest_threshold if settings_row else 3,
         connected=connected,

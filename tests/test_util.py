@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bot.util import cooldown_minutes_left, mask, thousands
+from bot.util import cooldown_minutes_left, mask, parse_utc_offset, thousands
 
 
 def test_cooldown_never_called_is_allowed_now() -> None:
@@ -31,3 +31,21 @@ def test_mask_reveals_only_length() -> None:
     secret = mask("super-secret-token")
     assert "super-secret-token" not in secret
     assert str(len("super-secret-token")) in secret
+
+
+def test_parse_utc_offset_basic_forms() -> None:
+    assert parse_utc_offset("+3") == 180
+    assert parse_utc_offset("-5") == -300
+    assert parse_utc_offset("3") == 180  # missing sign means positive
+    assert parse_utc_offset("+5:30") == 330
+    assert parse_utc_offset("-9:45") == -585
+    assert parse_utc_offset("UTC+3") == 180
+    assert parse_utc_offset("utc-8") == -480
+
+
+def test_parse_utc_offset_rejects_out_of_range_and_garbage() -> None:
+    assert parse_utc_offset("+15") is None  # past UTC+14
+    assert parse_utc_offset("-13") is None  # past UTC-12
+    assert parse_utc_offset("not a timezone") is None
+    assert parse_utc_offset("") is None
+    assert parse_utc_offset("+3:99") is None  # not a real minute count
