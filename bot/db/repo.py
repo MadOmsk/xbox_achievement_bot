@@ -234,6 +234,16 @@ class PlatformLink:
     linked_at: str
 
 
+@dataclass(slots=True)
+class SteamSchemaAchievement:
+    """One achievement's game-level (not per-person) data — the game's
+    achievement list itself, cached forever (SPEC 9, M-Steam-2b)."""
+
+    apiname: str
+    icon: str | None
+    hidden: bool
+
+
 class Database:
     """Owns the connection and brings the file up to the current schema."""
 
@@ -1275,6 +1285,64 @@ class Repo:
                 entry.genre,
                 utcnow_iso(),
             ),
+        )
+        await self._conn.commit()
+
+    # ---------------------------------------------- Steam achievement cache
+
+    async def steam_schema_get_cached(
+        self, appid: str
+    ) -> tuple[str | None, list[SteamSchemaAchievement]] | None:
+        """The game's own achievement list — cached forever, one row per
+        appid, never invalidated (SPEC 9, M-Steam-2b): a game's achievements
+        don't change between polls the way unlock percentages do."""
+        cursor = await self._conn.execute(
+            "SELECT game_name, achievements FROM steam_schema_cache WHERE appid = ?",
+            (appid,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        achievements = [
+            SteamSchemaAchievement(
+                apiname=item["apiname"], icon=item["icon"], hidden=item["hidden"]
+            )
+            for item in json.loads(row["achievements"])
+        ]
+        return row["game_name"], achievements
+
+    async def steam_schema_cache_result(
+        self, appid: str, game_name: str | None, achievements: list[SteamSchemaAchievement]
+    ) -> None:
+        blob = json.dumps(
+            [{"apiname": a.apiname, "icon": a.icon, "hidden": a.hidden} for a in achievements]
+        )
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO steam_schema_cache (appid, game_name, achievements, cached_at) "
+            "VALUES (?, ?, ?, ?)",
+            (appid, game_name, blob, utcnow_iso()),
+        )
+        await self._conn.commit()
+
+    async def steam_rarity_get_cached(self, appid: str) -> tuple[dict[str, float], str] | None:
+        """Percentages plus their own cache timestamp — unlike the schema
+        above, real percentages drift over time, so the caller (services/
+        steam/achievements.py) decides whether `cached_at` is too old and
+        needs a fresh fetch, this layer just reports what's there."""
+        cursor = await self._conn.execute(
+            "SELECT percentages, cached_at FROM steam_rarity_cache WHERE appid = ?",
+            (appid,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return json.loads(row["percentages"]), row["cached_at"]
+
+    async def steam_rarity_cache_result(self, appid: str, percentages: dict[str, float]) -> None:
+        await self._conn.execute(
+            "INSERT OR REPLACE INTO steam_rarity_cache (appid, percentages, cached_at) "
+            "VALUES (?, ?, ?)",
+            (appid, json.dumps(percentages), utcnow_iso()),
         )
         await self._conn.commit()
 

@@ -1,5 +1,7 @@
-"""Steam Web API: resolving a profile and checking its visibility
-(M-Steam-1, TODO.md — account linking only, no achievement polling yet).
+"""Steam Web API: profile linking (M-Steam-1) and achievement lookups
+(SPEC 9, M-Steam-2b) — a stateless client only, no `repo`. Caching and
+stitching schema/rarity onto a person's unlocked achievements happens one
+layer up, in services/steam/achievements.py.
 
 Official, documented endpoints — unlike Xbox's hand-rolled contract-4
 achievements or HowLongToBeat's reverse-engineered search, nothing here is
@@ -7,15 +9,15 @@ guesswork and nothing needs per-user OAuth. One API key for the whole bot;
 the only thing that can go wrong per person is a private profile, which is
 their own setting to fix, not ours.
 
-Verified live against a real key: GetPlayerSummaries returned a real
-profile with the fields this module reads, and ResolveVanityURL on a
-deliberately made-up name came back as a clean "no match" rather than an
-auth error — both calls genuinely reach Steam, not just parse correctly.
+Verified live against a real key and a real linked account (appid 550 —
+Left 4 Dead 2, 101 achievements): every function here has been run against
+the genuine endpoint, not just parsed against a guessed shape.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import httpx
 
@@ -47,6 +49,33 @@ class SteamProfile:
         self.steam_id = steam_id
         self.persona_name = persona_name
         self.is_public = is_public
+
+
+@dataclass(slots=True)
+class RawAchievement:
+    """One entry from GetPlayerAchievements — already localized (`l=russian`
+    on the request), unlike Xbox's separate localization call (SPEC 9,
+    M-Steam-2b)."""
+
+    apiname: str
+    achieved: bool
+    unlocktime: int  # unix epoch; 0 means "no real date", same class of
+    # placeholder as Xbox's 0001-01-01/1753-01-01 (parsed in achievements.py)
+    name: str
+    description: str | None
+
+
+@dataclass(slots=True)
+class RawSchemaAchievement:
+    """One entry from GetSchemaForGame — about the game, not the person, so
+    cached forever like hltb_cache (SPEC 9, M-Steam-2b). Steam calls the
+    identifier `name` here and `apiname` in GetPlayerAchievements above —
+    normalized to `apiname` on this side so both endpoints stitch on the
+    same field name."""
+
+    apiname: str
+    icon: str | None  # unlocked icon, not `icongray` — only unlocked ever gets published
+    hidden: bool  # Steam's own secrecy flag, Steam's isSecret equivalent (7.1)
 
 
 async def resolve_steam_id(api_key: str, raw: str) -> str:
@@ -85,8 +114,81 @@ async def get_profile(api_key: str, steam_id: str) -> SteamProfile:
     )
 
 
+async def get_player_achievements(
+    api_key: str, steam_id: str, appid: str
+) -> list[RawAchievement]:
+    """`success: false` in the body is an expected response, not an HTTP
+    error (SPEC 9, M-Steam-2b) — a profile that went private after linking,
+    or a game with no achievement stats at all. Both just mean "nothing for
+    this game right now", same as an empty list."""
+    payload = await _get(
+        "/ISteamUserStats/GetPlayerAchievements/v1/",
+        api_key,
+        {"steamid": steam_id, "appid": appid, "l": "russian"},
+    )
+    stats = payload.get("playerstats") or {}
+    if not stats.get("success"):
+        return []
+    return [
+        RawAchievement(
+            apiname=str(item["apiname"]),
+            achieved=bool(item.get("achieved")),
+            unlocktime=int(item.get("unlocktime") or 0),
+            name=item.get("name") or item["apiname"],
+            description=item.get("description"),
+        )
+        for item in stats.get("achievements") or []
+        if item.get("apiname")
+    ]
+
+
+async def get_schema(api_key: str, appid: str) -> list[RawSchemaAchievement]:
+    """About the game, not any one person — cache this forever, never per
+    request (SPEC 9, M-Steam-2b)."""
+    payload = await _get(
+        "/ISteamUserStats/GetSchemaForGame/v2/", api_key, {"appid": appid, "l": "russian"}
+    )
+    achievements = (payload.get("game") or {}).get("availableGameStats", {}).get(
+        "achievements"
+    ) or []
+    return [
+        RawSchemaAchievement(
+            apiname=str(item["name"]),  # Steam's own key here, not `apiname`
+            icon=item.get("icon") or None,
+            hidden=bool(item.get("hidden")),
+        )
+        for item in achievements
+        if item.get("name")
+    ]
+
+
+async def get_global_percentages(appid: str) -> dict[str, float]:
+    """No API key at all — this endpoint is public (SPEC 9, M-Steam-2b).
+    Real percentages drift over time, unlike the schema above, so the
+    caching layer (services/steam/achievements.py) expires this one."""
+    payload = await _get(
+        "/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/", "", {"gameid": appid}
+    )
+    achievements = (payload.get("achievementpercentages") or {}).get("achievements") or []
+    result: dict[str, float] = {}
+    for item in achievements:
+        name = item.get("name")
+        if not name:
+            continue
+        try:
+            result[str(name)] = float(item.get("percent", 0))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 async def _get(path: str, api_key: str, params: dict[str, str]) -> dict:
-    query = {"key": api_key, "format": "json", **params}
+    # GetGlobalAchievementPercentagesForApp needs no key at all (SPEC 9,
+    # M-Steam-2b) — omitted rather than sent empty, matching what was
+    # verified live against the real endpoint.
+    query = {"format": "json", **params}
+    if api_key:
+        query["key"] = api_key
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:

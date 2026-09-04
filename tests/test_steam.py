@@ -9,7 +9,14 @@ import pytest
 
 from bot.db.repo import Repo
 from bot.services.steam import client as steam_client
-from bot.services.steam.client import SteamApiError, get_profile, resolve_steam_id
+from bot.services.steam.client import (
+    SteamApiError,
+    get_global_percentages,
+    get_player_achievements,
+    get_profile,
+    get_schema,
+    resolve_steam_id,
+)
 
 STEAM_ID = "76561197960287930"  # a real, long-public Valve account (Gabe Newell)
 
@@ -93,6 +100,116 @@ async def test_get_profile_raises_for_an_unknown_id(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(SteamApiError):
         await get_profile("key", "0")
+
+
+async def test_get_player_achievements_parses_unlocked_and_locked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        assert path == "/ISteamUserStats/GetPlayerAchievements/v1/"
+        assert params == {"steamid": STEAM_ID, "appid": "550", "l": "russian"}
+        return {
+            "playerstats": {
+                "steamID": STEAM_ID,
+                "gameName": "Left 4 Dead 2",
+                "success": True,
+                "achievements": [
+                    {
+                        "apiname": "ACH_A",
+                        "achieved": 1,
+                        "unlocktime": 1260104110,
+                        "name": "Достижение А",
+                        "description": "Описание А",
+                    },
+                    {"apiname": "ACH_B", "achieved": 0, "unlocktime": 0, "name": "Б"},
+                ],
+            }
+        }
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    achievements = await get_player_achievements("key", STEAM_ID, "550")
+
+    assert len(achievements) == 2
+    a = achievements[0]
+    assert (a.apiname, a.achieved, a.unlocktime) == ("ACH_A", True, 1260104110)
+    assert (a.name, a.description) == ("Достижение А", "Описание А")
+    assert achievements[1].achieved is False
+
+
+async def test_get_player_achievements_returns_empty_on_success_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A private profile (closed after linking) or a game with no stats at
+    # all — Steam answers 200 with success: false, not an HTTP error
+    # (SPEC 9, M-Steam-2b) — treated as "nothing here", not raised.
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        return {"playerstats": {"success": False}}
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    assert await get_player_achievements("key", STEAM_ID, "550") == []
+
+
+async def test_get_schema_parses_icon_and_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        assert path == "/ISteamUserStats/GetSchemaForGame/v2/"
+        assert params == {"appid": "550", "l": "russian"}
+        return {
+            "game": {
+                "gameName": "Left 4 Dead 2",
+                "availableGameStats": {
+                    "achievements": [
+                        {
+                            "name": "ACH_A",
+                            "displayName": "Достижение А",
+                            "hidden": 0,
+                            "icon": "https://example.com/a.jpg",
+                            "icongray": "https://example.com/a_gray.jpg",
+                        },
+                        {
+                            "name": "ACH_SECRET",
+                            "displayName": "???",
+                            "hidden": 1,
+                            "icon": "https://example.com/s.jpg",
+                        },
+                    ]
+                },
+            }
+        }
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    schema = await get_schema("key", "550")
+
+    assert [(a.apiname, a.icon, a.hidden) for a in schema] == [
+        ("ACH_A", "https://example.com/a.jpg", False),
+        ("ACH_SECRET", "https://example.com/s.jpg", True),
+    ]
+
+
+async def test_get_global_percentages_parses_percent_strings_as_float(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_get(path: str, api_key: str, params: dict[str, str]) -> dict:
+        assert path == "/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/"
+        # No key at all (SPEC 9, M-Steam-2b) — this endpoint is public.
+        assert api_key == ""
+        assert params == {"gameid": "550"}
+        return {
+            "achievementpercentages": {
+                "achievements": [
+                    {"name": "ACH_A", "percent": "69.4"},
+                    {"name": "ACH_B", "percent": "12.1"},
+                ]
+            }
+        }
+
+    monkeypatch.setattr(steam_client, "_get", fake_get)
+
+    percentages = await get_global_percentages("550")
+
+    assert percentages == {"ACH_A": 69.4, "ACH_B": 12.1}
 
 
 async def test_platform_link_round_trip(repo: Repo) -> None:

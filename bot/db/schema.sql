@@ -231,3 +231,26 @@ CREATE TABLE IF NOT EXISTS platform_links (
     linked_at    TEXT    NOT NULL,
     PRIMARY KEY (tg_id, platform)
 );
+
+-- Steam's own achievement schema for a game (M-Steam-2b, SPEC 9) — not about
+-- any one person, one row per appid, JSON-blobbed like hltb_cache.platforms:
+-- dozens of achievements per game, not worth a row-per-achievement table.
+-- Cached forever, same as hltb_cache — a game's own achievement list/names/
+-- icons/secrecy never change between polls.
+CREATE TABLE IF NOT EXISTS steam_schema_cache (
+    appid           TEXT PRIMARY KEY,
+    game_name       TEXT,
+    achievements    TEXT NOT NULL,   -- JSON: [{apiname, icon, hidden}] — name/description
+                                      -- come from GetPlayerAchievements instead (already
+                                      -- localized per person), not duplicated here
+    cached_at       TEXT NOT NULL
+);
+
+-- Global unlock percentages per achievement (M-Steam-2b) — unlike the schema
+-- above, the real percentage drifts over time as more people play, so this
+-- one expires (bot/services/steam/achievements.py) instead of living forever.
+CREATE TABLE IF NOT EXISTS steam_rarity_cache (
+    appid           TEXT PRIMARY KEY,
+    percentages     TEXT NOT NULL,   -- JSON: {apiname: percent}
+    cached_at       TEXT NOT NULL
+);
