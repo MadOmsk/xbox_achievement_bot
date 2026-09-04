@@ -25,6 +25,24 @@ def rarity_badge(rarity_percent: float | None) -> str:
     return ""
 
 
+# Same palette as /stats' and /online's platform circles (handlers/chat.py)
+# — duplicated rather than imported, since services must never depend on
+# handlers (CLAUDE.md's layering rule runs one way only). Labels are needed
+# here and not there, so the two dicts aren't identical either.
+_PLATFORM_ICON = {"modern": "🟢", "x360": "🟢", "steam": "⚫", "psn": "🔵"}
+_PLATFORM_LABEL = {"modern": "Xbox", "x360": "Xbox 360", "steam": "Steam", "psn": "PlayStation"}
+
+
+def platform_tag(platform: str) -> str:
+    """SPEC 9, M-Steam-2e — which platform an achievement came from, right
+    in the message itself, not just inferred from context. Found live: a
+    Steam achievement arriving with no platform mention at all reads the
+    same as any other message, easy to miss."""
+    icon = _PLATFORM_ICON.get(platform, "⚪")
+    label = _PLATFORM_LABEL.get(platform, platform)
+    return f"{icon} {label}"
+
+
 #  Platforms with no rarity data at all — the rarity filter can't decide
 #  "rare" for them, so 'rare' mode falls back to showing everything, the
 #  same way 'all' mode would (SPEC 5.5, 1.4). Currently only Xbox 360
@@ -106,10 +124,13 @@ def _spoiler(text: str, *, secret: bool) -> str:
 
 def format_single(gamertag: str, achievement: AchievementRow, title_name: str | None) -> str:
     title = title_name or achievement.title_name or "неизвестная игра"
-    parts = [html_escape(title), f"{achievement.gamerscore} G"]
-    if achievement.platform == "x360":
-        parts.append("Xbox 360")
-    elif achievement.rarity_percent is not None:
+    parts = [html_escape(title), platform_tag(achievement.platform)]
+    # Steam has no gamerscore at all — services/steam/achievements.py always
+    # parses it as 0, and "0 G" reads as a real (if trivial) score rather
+    # than "not applicable here" (SPEC 9, M-Steam-2e).
+    if achievement.platform != "steam":
+        parts.append(f"{achievement.gamerscore} G")
+    if achievement.platform != "x360" and achievement.rarity_percent is not None:
         badge = rarity_badge(achievement.rarity_percent)
         parts.append(f"редкость {achievement.rarity_percent:g}%{' ' + badge if badge else ''}")
 

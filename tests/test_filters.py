@@ -103,13 +103,29 @@ def test_min_gamerscore_and_mute() -> None:
 def test_single_message_mentions_rarity_and_badge() -> None:
     text = format_single("Igor", achievement(rarity=2.4), "Halo Infinite")
     assert "Igor выбил «Ashes to Ashes»" in text
-    assert "Halo Infinite · 20 G · редкость 2.4% 💎" in text
+    assert "Halo Infinite · 🟢 Xbox · 20 G · редкость 2.4% 💎" in text
 
 
 def test_single_message_for_x360_says_so_instead_of_rarity() -> None:
     text = format_single("Igor", achievement(rarity=None, platform="x360"), "Halo 3")
-    assert "Halo 3 · 20 G · Xbox 360" in text
+    assert "Halo 3 · 🟢 Xbox 360 · 20 G" in text
     assert "редкость" not in text
+
+
+def test_single_message_omits_gamerscore_for_steam() -> None:
+    """Steam has no gamerscore at all — always parsed as 0
+    (services/steam/achievements.py) — "0 G" would read as a real score,
+    not "not applicable" (SPEC 9, M-Steam-2e)."""
+    item = achievement(rarity=92.2, platform="steam", gamerscore=0)
+    text = format_single("Igor", item, "Deadlock")
+    assert "G" not in text.split("\n")[1]
+
+
+def test_single_message_tags_the_platform() -> None:
+    """SPEC 9, M-Steam-2e — found live: a Steam achievement with no platform
+    mention at all was easy to miss among Xbox ones."""
+    text = format_single("Igor", achievement(rarity=92.2, platform="steam"), "Deadlock")
+    assert "⚫ Steam" in text
 
 
 def test_digest_counts_and_trims() -> None:
