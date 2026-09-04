@@ -1029,13 +1029,18 @@ class Repo:
     async def recent_games(self, xuid: str, since: datetime, limit: int = 15) -> list[TopGame]:
         """Games actually played recently, not the biggest lifetime scores —
         a person's five favourite old games would otherwise crowd out
-        whatever they are playing this month, every time."""
+        whatever they are playing this month, every time.
+
+        `limit == 0` means "no cap" (admin-configurable, SPEC 6.4) — passed
+        to SQLite as -1, its own documented spelling of "unbounded LIMIT",
+        rather than branching the query string for one case.
+        """
         cursor = await self._conn.execute(
             "SELECT t.name, COALESCE(SUM(s.gamerscore), 0) AS score, COUNT(*) AS unlocked "
             "FROM seen_achievements s LEFT JOIN titles t ON t.title_id = s.title_id "
             "WHERE s.xuid = ? AND s.unlocked_at >= ? "
             "GROUP BY s.title_id ORDER BY score DESC LIMIT ?",
-            (xuid, _iso(since), limit),
+            (xuid, _iso(since), limit or -1),
         )
         return [
             TopGame(name=row["name"], gamerscore=row["score"], unlocked=row["unlocked"], total=None)

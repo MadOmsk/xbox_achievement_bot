@@ -73,9 +73,11 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
 
     assert text is not None
     assert "Igor" in text and "Alex" in text
-    assert "24 часа" in text and "30 дней" in text  # not the same label twice
-    assert "<pre>" in text and "</pre>" in text  # a monospace table, not prose
-    assert text.count("Всего") == 2  # one total per window
+    # One totals line per window, label fused right into it (not a separate
+    # "Всего" line any more — the label itself says which window it is).
+    assert text.count("<b>24 часа:</b>") == 1
+    assert text.count("<b>30 дней:</b>") == 1
+    assert "<blockquote expandable>" in text and "</blockquote>" in text
 
 
 async def test_zero_scorers_still_appear(repo: Repo) -> None:
@@ -91,7 +93,7 @@ async def test_zero_scorers_still_appear(repo: Repo) -> None:
 
 
 async def test_gamertag_is_escaped_inside_the_html_table(repo: Repo) -> None:
-    """The table is an HTML <pre> block; an unescaped "<" or "&" in a
+    """The list lives inside a <blockquote>; an unescaped "<" or "&" in a
     gamertag would break the markup Telegram parses."""
     await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
     await repo.ensure_user(1, "weird")
@@ -194,6 +196,28 @@ async def test_summary_offers_show_all_button_only_past_the_configured_limit(
     # Only 2 of the 3 players make it into the capped 24h table.
     day_section = text.split("30 дней")[0]
     assert sum(day_section.count(f"Player{i}") for i in range(3)) == 2
+
+
+async def test_summary_top_limit_zero_means_no_cap(repo: Repo) -> None:
+    """0 means "no cap" (SPEC 6.4) — everyone fits in the list, so there is
+    nothing left for a «Показать всех» button to add."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    for i in range(3):
+        tg_id, xuid, tag = i + 1, f"xuid-{i}", f"Player{i}"
+        await repo.ensure_user(tg_id, tag.lower())
+        await repo.link_xbox_account(tg_id, xuid, tag, 0)
+        await repo.subscribe(CHAT_ID, tg_id)
+        await repo.insert_new_achievements(
+            xuid, [achievement(f"a{i}", utcnow())], is_backfill=False
+        )
+    await repo.set_app_setting("summary_top_limit", "0")
+
+    built = await build_summary(repo, CHAT_ID, 10.0, utcnow().date())
+
+    assert built is not None
+    text, markup = built
+    assert markup is None  # nothing truncated, nothing to show more of
+    assert all(f"Player{i}" in text for i in range(3))
 
     full = await full_leaderboard(repo, CHAT_ID, 10.0, "day")
     assert full is not None

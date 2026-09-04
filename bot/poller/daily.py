@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from html import escape as html_escape
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -18,7 +19,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import plural_achievements
 from bot.services.stats import local_now
-from bot.services.tables import render_table, total_line, truncate_name
+from bot.services.tables import blockquote, total_line, truncate_name
 from bot.util import thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -122,13 +123,13 @@ async def build_summary(
     )
 
     top_limit = await current_top_limit(repo)
-    day_lines, day_full = _section(day_rows, top_limit)
-    lines = [f"📊 <b>24 часа</b>, {today.day} {MONTHS[today.month - 1]}", *day_lines]
+    day_lines, day_full = _section("24 часа", day_rows, top_limit)
+    lines = [f"📊 <b>Итог дня</b>, {today.day} {MONTHS[today.month - 1]}", "", *day_lines]
 
     month_full = False
     if month_rows:
-        month_lines, month_full = _section(month_rows, top_limit)
-        lines += ["", "📊 <b>30 дней</b>", *month_lines]
+        month_lines, month_full = _section("30 дней", month_rows, top_limit)
+        lines += ["", *month_lines]
 
     buttons = []
     if day_full:
@@ -144,7 +145,7 @@ async def build_summary(
 
 
 async def full_leaderboard(repo: Repo, chat_id: int, threshold: float, window: str) -> str | None:
-    """The uncapped table behind a summary's «Показать всех» button (SPEC
+    """The uncapped list behind a summary's «Показать всех» button (SPEC
     6.3) — re-fetched fresh rather than carried over from the original send,
     same as /hltb's sessions do for their own "current data" reasons."""
     now = utcnow()
@@ -152,28 +153,35 @@ async def full_leaderboard(repo: Repo, chat_id: int, threshold: float, window: s
     rows = await repo.chat_member_stats(chat_id, now - timedelta(hours=hours), threshold)
     if not rows:
         return None
-    lines, _ = _section(rows, limit=len(rows))  # limit=len(rows): never truncate here
+    # limit=len(rows): never truncate here — this is the "show everything"
+    # view; expandable=False for the same reason (SPEC 6.3).
+    lines, _ = _section("Всего", rows, limit=len(rows), expandable=False)
     label = "24 часа" if window == "day" else "30 дней"
-    return "\n".join([f"📊 <b>{label}, полностью</b>", *lines])
+    return "\n".join([f"📊 <b>{label}, полностью</b>", "", *lines])
 
 
-def _section(rows: list[ChatMemberStat], limit: int) -> tuple[list[str], bool]:
+def _section(
+    label: str, rows: list[ChatMemberStat], limit: int, *, expandable: bool = True
+) -> tuple[list[str], bool]:
+    """The totals line comes first, then the list — reversed from the old
+    table-then-total order, so the headline number reads before you tap the
+    list open (SPEC 6.3, 7.3). `limit == 0` means "no cap" (admin-configured,
+    6.4) — a list this long only ever lives inside a collapsible quote, so
+    there is nothing left to truncate for.
+    """
     total = sum(row.count for row in rows)
     score = sum(row.score for row in rows)
-    table = render_table(
-        ["#", "Игрок", "Ач.", "+G", "💎"],
-        [_table_row(place, row) for place, row in enumerate(rows[:limit], start=1)],
-        ["<", "<", ">", ">", ">"],
+    summary = total_line(label, f"{plural_achievements(total)}, +{thousands(score)} G")
+    capped = rows if limit == 0 else rows[:limit]
+    rows_block = blockquote(
+        [_leader_row(place, row) for place, row in enumerate(capped, start=1)],
+        expandable=expandable,
     )
-    lines = [table, total_line("Всего", f"{plural_achievements(total)}, +{thousands(score)} G")]
-    return lines, len(rows) > limit
+    has_more = limit != 0 and len(rows) > limit
+    return [summary, rows_block], has_more
 
 
-def _table_row(place: int, row: ChatMemberStat) -> list[str]:
-    return [
-        str(place),
-        truncate_name(row.gamertag or f"id{row.tg_id}"),
-        str(row.count),
-        f"+{thousands(row.score)}",
-        str(row.rare) if row.rare else "",
-    ]
+def _leader_row(place: int, row: ChatMemberStat) -> str:
+    name = html_escape(truncate_name(row.gamertag or f"id{row.tg_id}"))
+    tail = f" 💎{row.rare}" if row.rare else ""
+    return f"{place}. {name} — {plural_achievements(row.count)}{tail} (+{thousands(row.score)} G)"

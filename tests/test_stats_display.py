@@ -51,17 +51,17 @@ async def test_header_gamerscore_is_the_profile_value_not_a_sum(repo: Repo) -> N
 
     user = await repo.get_user(1)
     assert user is not None
-    built = await _build_stats_text(repo, user)
+    text = await _build_stats_text(repo, user)
 
-    assert built is not None
-    text, _markup = built
+    assert text is not None
     assert "999" in text.split("\n")[0]  # thousands() formatting, profile value
     assert "10 G" not in text.split("\n")[0]
 
 
-async def test_stats_offers_show_all_games_button_only_past_the_limit(repo: Repo) -> None:
-    """stats_games_limit (default 15) caps the "Игры за 30 дней" table; past
-    it a "Показать все игры" button should appear (SPEC 6.3)."""
+async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:
+    """stats_games_limit (default 15) caps how many games show — no separate
+    "показать все игры" button any more, the list is a collapsible quote
+    (SPEC 1.6, 6.4)."""
     await repo.ensure_user(1, "someone")
     await repo.link_xbox_account(1, XUID, "Someone", 0)
     await repo.set_app_setting("stats_games_limit", "2")
@@ -70,26 +70,25 @@ async def test_stats_offers_show_all_games_button_only_past_the_limit(repo: Repo
 
     user = await repo.get_user(1)
     assert user is not None
-    built = await _build_stats_text(repo, user)
+    text = await _build_stats_text(repo, user)
 
-    assert built is not None
-    text, markup = built
-    assert markup is not None
-    buttons = [b for row in markup.inline_keyboard for b in row]
-    assert any(b.callback_data == f"stats:allgames:{XUID}" for b in buttons)
-    # 3 distinct games exist, but only 2 (the limit) render as table rows.
+    assert text is not None
+    # 3 distinct games exist, but only 2 (the limit) render as list rows.
     assert text.count("без названия") == 2
 
 
-async def test_stats_has_no_show_all_games_button_under_the_limit(repo: Repo) -> None:
+async def test_zero_limit_shows_every_game_uncapped(repo: Repo) -> None:
+    """0 means "no cap" (SPEC 6.4) — the whole point of dropping the old
+    fixed-height table for a collapsible quote."""
     await repo.ensure_user(1, "someone")
     await repo.link_xbox_account(1, XUID, "Someone", 0)
-    await repo.insert_new_achievements(XUID, [_achievement("1")], is_backfill=False)
+    await repo.set_app_setting("stats_games_limit", "0")
+    for i in range(5):
+        await repo.insert_new_achievements(XUID, [_achievement(str(i))], is_backfill=False)
 
     user = await repo.get_user(1)
     assert user is not None
-    built = await _build_stats_text(repo, user)
+    text = await _build_stats_text(repo, user)
 
-    assert built is not None
-    _text, markup = built
-    assert markup is None
+    assert text is not None
+    assert text.count("без названия") == 5

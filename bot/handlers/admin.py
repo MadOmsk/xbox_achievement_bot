@@ -90,9 +90,20 @@ _LIMIT_DEFAULTS = {
     "hltb_page_size": "5",
 }
 # hltb_page_size feeds Telegram inline-keyboard rows directly — 50 buttons on
-# one page would be unusable, unlike the other three (row caps behind a
-# "показать всех"/scroll, not a keyboard grid).
+# one page would be unusable, unlike the other two below (a list inside a
+# collapsible quote, SPEC 1.6, not a keyboard grid).
 _LIMIT_MAX_OVERRIDES = {"hltb_page_size": 10}
+# summary_top_limit/stats_games_limit render into a <blockquote expandable>
+# now, not a fixed-width table — an "unlimited" list fits there just fine
+# (SPEC 1.6), so these two alone allow 0 for "no cap". hltb's two stay at 1:
+# a page size or a search pool of 0 is just broken, not "show everything".
+_LIMIT_MIN_OVERRIDES = {"summary_top_limit": 0, "stats_games_limit": 0}
+
+UNLIMITED_LABEL = "без ограничения"
+
+
+def _format_limit(value: str) -> str:
+    return UNLIMITED_LABEL if value == "0" else value
 
 
 @router.callback_query(F.data == "a:limits")
@@ -101,14 +112,16 @@ async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
     for key, label in _LIMIT_LABELS.items():
         current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
         builder.row(
-            InlineKeyboardButton(text=f"{label}: {current} ▸", callback_data=f"a:limit:{key}")
+            InlineKeyboardButton(
+                text=f"{label}: {_format_limit(current)} ▸", callback_data=f"a:limit:{key}"
+            )
         )
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
         callback,
-        "Лимиты строк в таблицах.\n\n"
-        "Когда реальных строк больше лимита, под таблицей появляется кнопка "
-        "«Показать все» — по ней прилетает отдельное сообщение с полным списком.",
+        "Лимиты строк в списках.\n\n"
+        "Списки /summary и /stats можно сделать безлимитными (0) — они и так "
+        "лежат в сворачиваемой цитате, урезать нечего.",
         builder.as_markup(),
     )
 
@@ -120,12 +133,15 @@ async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
     label = _LIMIT_LABELS[key]
     current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
     _awaiting_input[callback.from_user.id] = (key, None)
+    limit_min = _LIMIT_MIN_OVERRIDES.get(key, LIMIT_MIN)
     limit_max = _LIMIT_MAX_OVERRIDES.get(key, LIMIT_MAX)
+    zero_hint = " (0 — без ограничения)" if limit_min == 0 else ""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:limits"))
     await _redraw(
         callback,
-        f"{label}: {current}\n\nПришли новое значение целым числом, от {LIMIT_MIN} до {limit_max}.",
+        f"{label}: {_format_limit(current)}\n\n"
+        f"Пришли новое значение целым числом, от {limit_min} до {limit_max}{zero_hint}.",
         builder.as_markup(),
     )
 
@@ -158,12 +174,13 @@ async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) 
         await message.answer("Здесь только целое число. Ещё раз?")
         return
     value_int = int(message.text)
+    limit_min = _LIMIT_MIN_OVERRIDES.get(key, LIMIT_MIN)
     limit_max = _LIMIT_MAX_OVERRIDES.get(key, LIMIT_MAX)
-    if not (LIMIT_MIN <= value_int <= limit_max):
-        await message.answer(f"Число должно быть от {LIMIT_MIN} до {limit_max}. Ещё раз?")
+    if not (limit_min <= value_int <= limit_max):
+        await message.answer(f"Число должно быть от {limit_min} до {limit_max}. Ещё раз?")
         return
     stored = str(value_int)
-    confirm = f"{_LIMIT_LABELS[key]}: {stored}"
+    confirm = f"{_LIMIT_LABELS[key]}: {_format_limit(stored)}"
 
     del _awaiting_input[message.from_user.id]
     await repo.set_app_setting(key, stored, message.from_user.id)

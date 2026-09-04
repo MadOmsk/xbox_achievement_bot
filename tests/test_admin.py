@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from bot.handlers.admin import (
+    _LIMIT_MIN_OVERRIDES,
     LIMIT_MAX,
     LIMIT_MIN,
     RARE_THRESHOLD_MAX,
     RARE_THRESHOLD_MIN,
+    UNLIMITED_LABEL,
     _format_api_usage,
+    _format_limit,
 )
 
 
@@ -31,3 +34,15 @@ def test_row_limit_bounds_reject_zero_and_absurdly_large() -> None:
     assert not (LIMIT_MIN <= 0 <= LIMIT_MAX)
     assert not (LIMIT_MIN <= 500 <= LIMIT_MAX)
     assert LIMIT_MIN <= 15 <= LIMIT_MAX
+
+
+def test_only_summary_and_stats_limits_allow_zero() -> None:
+    """0 means "no cap" (SPEC 6.4) — meaningful for a list inside a
+    collapsible quote, not for hltb_page_size (feeds a keyboard grid) or
+    hltb_results_limit (a search pool of 0 is just broken)."""
+    assert _LIMIT_MIN_OVERRIDES == {"summary_top_limit": 0, "stats_games_limit": 0}
+
+
+def test_format_limit_shows_unlimited_for_zero() -> None:
+    assert _format_limit("0") == UNLIMITED_LABEL
+    assert _format_limit("15") == "15"

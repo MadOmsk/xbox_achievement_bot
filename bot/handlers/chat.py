@@ -8,6 +8,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from html import escape as html_escape
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot, F, Router
@@ -33,7 +34,7 @@ from bot.db.repo import ChatPresenceRow, RecentAchievement, Repo, TopGame, User
 from bot.poller.daily import build_summary, full_leaderboard
 from bot.services.achievements import plural_achievements, rarity_badge
 from bot.services.stats import counters_for, local_now
-from bot.services.tables import render_table, truncate_name
+from bot.services.tables import blockquote, truncate_name
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
 
 log = logging.getLogger(__name__)
@@ -176,25 +177,16 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
 # -------------------------------------------------------------------- stats
 
 
-def _games_table(games: list[TopGame]) -> str:
-    return render_table(
-        ["#", "Игра", "Ач.", "+G"],
-        [
-            [
-                str(place),
-                truncate_name(game.name or "без названия"),
-                str(game.unlocked or 0),
-                f"+{thousands(game.gamerscore or 0)}",
-            ]
-            for place, game in enumerate(games, start=1)
-        ],
-        ["<", "<", ">", ">"],
-    )
+def _games_list(games: list[TopGame]) -> str:
+    rows = [
+        f"{place}. {html_escape(truncate_name(game.name or 'без названия'))} — "
+        f"{game.unlocked or 0} ач. (+{thousands(game.gamerscore or 0)} G)"
+        for place, game in enumerate(games, start=1)
+    ]
+    return blockquote(rows)
 
 
-async def _build_stats_text(
-    repo: Repo, target: User
-) -> tuple[str, InlineKeyboardMarkup | None] | None:
+async def _build_stats_text(repo: Repo, target: User) -> str | None:
     """Shared by /stats and /who's buttons (SPEC 6.3) — one implementation,
     so a player's card looks the same no matter how it was opened."""
     if not target.xuid:
@@ -202,7 +194,7 @@ async def _build_stats_text(
 
     counters = await counters_for(repo, target.xuid)
     lines = [
-        f"📊 <b>{target.gamertag or 'без геймертега'}</b>  ·  "
+        f"📊 <b>{html_escape(target.gamertag or 'без геймертега')}</b>  ·  "
         f"gamerscore {thousands(target.gamerscore or 0)}",
         "",
         f"Сегодня:   {plural_achievements(counters.today)} (+{counters.today_score} G)",
@@ -213,27 +205,15 @@ async def _build_stats_text(
         # date-bounded one can — better absent than quietly wrong (SPEC 5.4).
     ]
 
+    # 0 = no cap (SPEC 6.4) — the list lives in a collapsible quote either
+    # way, so there is no separate "показать все игры" tap needed any more
+    # (dropped along with the old fixed-height table).
     limit = await _stats_games_limit(repo)
     since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
-    # limit+1: not for display, just enough to tell "more exist" from
-    # "exactly limit exist" without a second, count-only query.
-    games = await repo.recent_games(target.xuid, since, limit=limit + 1)
-    markup = None
+    games = await repo.recent_games(target.xuid, since, limit=limit)
     if games:
-        truncated = len(games) > limit
-        lines += ["", f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>", _games_table(games[:limit])]
-        if truncated:
-            markup = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="📋 Показать все игры",
-                            callback_data=f"stats:allgames:{target.xuid}",
-                        )
-                    ]
-                ]
-            )
-    return "\n".join(lines), markup
+        lines += ["", f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>", _games_list(games)]
+    return "\n".join(lines)
 
 
 async def _stats_games_limit(repo: Repo) -> int:
@@ -244,36 +224,17 @@ async def _stats_games_limit(repo: Repo) -> int:
         return 15
 
 
-@router.callback_query(F.data.startswith("stats:allgames:"))
-async def stats_show_all_games(callback: CallbackQuery, repo: Repo) -> None:
-    """«Показать все игры» under a truncated /stats table — a fresh message
-    with the uncapped list, not the original re-edited (SPEC 6.3)."""
-    if not isinstance(callback.message, Message):
-        return
-    assert callback.data is not None
-    xuid = callback.data.rsplit(":", 1)[1]
-    since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
-    # A defensive cap, not a real one: nobody plays 200 distinct games in 30
-    # days, this just keeps a pathological case from overflowing a message.
-    games = await repo.recent_games(xuid, since, limit=200)
-    await callback.answer()
-    if games:
-        text = f"<b>Игры за {RECENT_GAMES_DAYS} дней, полностью</b>\n{_games_table(games)}"
-        await callback.message.answer(text, parse_mode=ParseMode.HTML)
-
-
 @router.message(Command("stats"))
 async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
     target = await _resolve(message, repo, command.args)
     if target is None:
         await message.answer(_UNKNOWN)
         return
-    built = await _build_stats_text(repo, target)
-    if built is None:
+    text = await _build_stats_text(repo, target)
+    if text is None:
         await message.answer("Этот человек ещё не подключил Xbox.")
         return
-    text, markup = built
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 # --------------------------------------------------------------------- online
@@ -348,11 +309,10 @@ async def who_stats_button(callback: CallbackQuery, repo: Repo) -> None:
     if target is None:
         await callback.answer("Не нашёл такого пользователя.", show_alert=True)
         return
-    built = await _build_stats_text(repo, target)
+    text = await _build_stats_text(repo, target)
     await callback.answer()
-    if built is not None and isinstance(callback.message, Message):
-        text, markup = built
-        await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    if text is not None and isinstance(callback.message, Message):
+        await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 # ------------------------------------------------------------------- summary
@@ -438,36 +398,29 @@ async def recent(message: Message, repo: Repo, command: CommandObject) -> None:
     if not rows:
         await message.answer("Пока пусто.")
         return
-    text = "🕘 <b>Последние ачивки</b>\n" + _recent_table(rows)
+    text = "🕘 <b>Последние ачивки</b>\n" + _recent_list(rows)
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
-def _recent_table(rows: list[RecentAchievement]) -> str:
-    return render_table(
-        ["Игрок", "Ачивка", "Игра", "+G", "Когда"],
-        [_recent_row(row) for row in rows],
-        ["<", "<", "<", ">", "<"],
-    )
+def _recent_list(rows: list[RecentAchievement]) -> str:
+    return blockquote([_recent_row(row) for row in rows])
 
 
-SECRET_ACHIEVEMENT_NAME = "🔒 Секретная"
-
-
-def _recent_row(row: RecentAchievement) -> list[str]:
-    # A Telegram spoiler tag can't live inside a <pre> table (Telegram
-    # strips/rejects nested entities there, and render_table HTML-escapes
-    # the finished block anyway) — a plain placeholder is the one thing that
-    # actually works in this monospace context (SPEC 6.3, 7.1).
-    display_name = SECRET_ACHIEVEMENT_NAME if row.is_secret else row.name
+def _recent_row(row: RecentAchievement) -> str:
+    # A real Telegram spoiler works fine inside a blockquote (unlike the old
+    # <pre> table it replaced, SPEC 7.1) — the real name stays hidden behind
+    # a tap, instead of a placeholder that gave nothing away to look up.
+    name = html_escape(truncate_name(row.name))
+    if row.is_secret:
+        name = f'<span class="tg-spoiler">{name}</span>'
     badge = rarity_badge(row.rarity_percent)
-    name = f"{badge}{display_name}" if badge else display_name
-    return [
-        truncate_name(row.gamertag or "кто-то", 12),
-        truncate_name(name, 18),
-        truncate_name(row.game or "без названия", 14),
-        f"+{thousands(row.gamerscore)}",
-        humanize_ago(row.unlocked_at),
-    ]
+    tail = f" {badge}" if badge else ""
+    gamertag = html_escape(truncate_name(row.gamertag or "кто-то"))
+    game = html_escape(truncate_name(row.game or "без названия"))
+    return (
+        f"🏆 {gamertag} — {name}, {game} (+{thousands(row.gamerscore)} G){tail}"
+        f" · {humanize_ago(row.unlocked_at)}"
+    )
 
 
 _UNKNOWN = (
