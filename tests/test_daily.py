@@ -80,6 +80,53 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
     assert "<blockquote expandable>" in text and "</blockquote>" in text
 
 
+async def test_leaderboard_shows_platform_breakdown_only_with_two_platforms(repo: Repo) -> None:
+    """2026-09-05 follow-up, reversal of "one combined number only": a
+    parenthetical next to the total, but only once there's something to
+    break down — a single-platform row must look exactly as it always
+    did (SPEC 9, M-Steam-2e's own leaderboard sort is untouched)."""
+    await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
+    await repo.ensure_user(1, "both")
+    await repo.link_xbox_account(1, XUID_A, "Both", 0)
+    await repo.link_platform_account(1, "steam", "76561197960287930", "BothSteam")
+    await repo.subscribe(CHAT_ID, 1)
+    await repo.ensure_user(2, "xboxonly")
+    await repo.link_xbox_account(2, XUID_B, "XboxOnly", 0)
+    await repo.subscribe(CHAT_ID, 2)
+
+    now = utcnow()
+    await repo.insert_new_achievements(XUID_A, [achievement("a1", now)], is_backfill=False)
+    await repo.insert_new_achievements_steam(
+        1,
+        "76561197960287930",
+        [
+            AchievementRow(
+                title_id="550",
+                achievement_id="s1",
+                name="s1",
+                description=None,
+                icon_url=None,
+                unlocked_at=now.isoformat(timespec="seconds"),
+                gamerscore=0,
+                rarity_percent=None,
+                platform="steam",
+            )
+        ],
+        is_backfill=False,
+    )
+    await repo.insert_new_achievements(XUID_B, [achievement("b1", now)], is_backfill=False)
+
+    text = await summary_text(repo, CHAT_ID, 10.0, now.date())
+
+    assert text is not None
+    both_line = next(
+        line for line in text.split("\n") if "Both" in line and "BothSteam" not in line
+    )
+    assert "(🟢 1 · ⚫ 1)" in both_line
+    xbox_only_line = next(line for line in text.split("\n") if "XboxOnly" in line)
+    assert "🟢" not in xbox_only_line and "⚫" not in xbox_only_line
+
+
 async def test_zero_scorers_still_appear(repo: Repo) -> None:
     """A subscriber with nothing unlocked used to vanish from the table
     entirely — the roster should show him at zero, not hide him."""

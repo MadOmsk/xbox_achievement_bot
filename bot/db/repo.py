@@ -218,6 +218,10 @@ class ChatMemberStat:
     count: int
     score: int
     rare: int
+    # Behind `count`'s single combined total (2026-09-05 follow-up) — a
+    # parenthetical next to it, not a second sort key or a second row.
+    xbox_count: int = 0
+    steam_count: int = 0
 
 
 @dataclass(slots=True)
@@ -1148,6 +1152,29 @@ class Repo:
         row = await cursor.fetchone()
         return (int(row[0]), int(row[1])) if row else (0, 0)
 
+    async def achievement_platform_breakdown(
+        self, tg_id: int, since: datetime | None
+    ) -> tuple[int, int]:
+        """The (xbox, steam) counts behind `achievement_counts_for_person`'s
+        single combined total (2026-09-05 follow-up, reversal of "one number
+        only" — SPEC 9 M-Steam-2e originally dropped a per-platform split on
+        purpose; the parenthetical here doesn't touch that decision, the
+        combined number still leads and still sorts). x360 counts as Xbox —
+        there's no separate UI concept of "Xbox 360" anywhere outside the
+        achievement message itself and the games table's own icon."""
+        query = (
+            "SELECT SUM(CASE WHEN platform IN ('modern', 'x360') THEN 1 ELSE 0 END),"
+            "       SUM(CASE WHEN platform = 'steam' THEN 1 ELSE 0 END) "
+            "FROM seen_achievements WHERE tg_id = ?"
+        )
+        params: list[object] = [tg_id]
+        if since is not None:
+            query += " AND unlocked_at >= ?"
+            params.append(_iso(since))
+        cursor = await self._conn.execute(query, params)
+        row = await cursor.fetchone()
+        return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
+
     async def platform_achievement_count(self, tg_id: int, platform: str) -> int:
         """Lifetime count for one platform (SPEC 9, M-Steam-2e's /stats line
         next to each connected platform) — deliberately not offered for
@@ -1206,7 +1233,10 @@ class Repo:
             "SELECT u.tg_id, u.gamertag, u.xuid, COUNT(s.achievement_id) AS cnt,"
             "       COALESCE(SUM(s.gamerscore), 0) AS score,"
             "       SUM(CASE WHEN s.rarity_percent IS NOT NULL AND s.rarity_percent <= ?"
-            "                THEN 1 ELSE 0 END) AS rare "
+            "                THEN 1 ELSE 0 END) AS rare,"
+            "       SUM(CASE WHEN s.platform IN ('modern', 'x360') THEN 1 ELSE 0 END)"
+            "           AS xbox_count,"
+            "       SUM(CASE WHEN s.platform = 'steam' THEN 1 ELSE 0 END) AS steam_count "
             "FROM subscriptions sub "
             "JOIN users u ON u.tg_id = sub.tg_id "
             # tg_id, not xuid (SPEC 9, M-Steam-2e) — sums every platform's
@@ -1227,6 +1257,8 @@ class Repo:
                 count=int(row["cnt"]),
                 score=int(row["score"]),
                 rare=int(row["rare"] or 0),
+                xbox_count=int(row["xbox_count"] or 0),
+                steam_count=int(row["steam_count"] or 0),
             )
             for row in await cursor.fetchall()
         ]

@@ -33,7 +33,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.db.repo import ChatPresenceRow, PlatformLink, RecentAchievement, Repo, TopGame, User
 from bot.handlers.admin import IsAdmin
 from bot.poller.daily import build_summary, full_leaderboard
-from bot.services.achievements import plural_achievements, rarity_badge
+from bot.services.achievements import platform_breakdown_suffix, plural_achievements, rarity_badge
 from bot.services.stats import counters_for, local_now
 from bot.services.tables import blockquote, truncate_name
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
@@ -238,10 +238,14 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
             f"  ·  {plural_achievements(count)}"
         )
 
+    today_breakdown = platform_breakdown_suffix(counters.today_xbox, counters.today_steam)
+    month_breakdown = platform_breakdown_suffix(counters.month_xbox, counters.month_steam)
     lines += [
         "",
-        f"Сегодня:   {plural_achievements(counters.today)} (+{counters.today_score} G)",
-        f"За месяц:  {plural_achievements(counters.month)} (+{thousands(counters.month_score)} G)",
+        f"Сегодня:   {plural_achievements(counters.today)}{today_breakdown}"
+        f" (+{counters.today_score} G)",
+        f"За месяц:  {plural_achievements(counters.month)}{month_breakdown}"
+        f" (+{thousands(counters.month_score)} G)",
         # No lifetime "Всего" here: seen_achievements is permanently
         # best-effort (title_history's cap, achievements with no unlock
         # date), so a lifetime count from it can't be trusted the way a

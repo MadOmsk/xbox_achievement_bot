@@ -17,7 +17,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.db.repo import ChatMemberStat, Repo
-from bot.services.achievements import plural_achievements
+from bot.services.achievements import platform_breakdown_suffix, plural_achievements
 from bot.services.stats import local_now
 from bot.services.tables import blockquote, total_line, truncate_name
 from bot.util import thousands, utcnow
@@ -184,4 +184,8 @@ def _section(
 def _leader_row(place: int, row: ChatMemberStat) -> str:
     name = html_escape(truncate_name(row.gamertag or f"id{row.tg_id}"))
     tail = f" 💎{row.rare}" if row.rare else ""
-    return f"{place}. {name} — {plural_achievements(row.count)}{tail} (+{thousands(row.score)} G)"
+    breakdown = platform_breakdown_suffix(row.xbox_count, row.steam_count)
+    return (
+        f"{place}. {name} — {plural_achievements(row.count)}{tail}{breakdown}"
+        f" (+{thousands(row.score)} G)"
+    )

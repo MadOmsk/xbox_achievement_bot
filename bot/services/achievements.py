@@ -33,6 +33,24 @@ _PLATFORM_ICON = {"modern": "🟢", "x360": "🟢", "steam": "⚫", "psn": "🔵
 _PLATFORM_LABEL = {"modern": "XBOX", "x360": "XBOX 360", "steam": "Steam", "psn": "PlayStation"}
 
 
+def platform_breakdown_suffix(xbox_count: int, steam_count: int) -> str:
+    """The small "(🟢 3 · ⚫ 5)" next to a combined achievement total in
+    /stats and /summary (2026-09-05 follow-up) — a parenthetical, not a
+    second sort key or a second row: the combined number still leads and
+    still sorts, this is purely for reference. Empty for anyone with
+    achievements on only one platform in the window — nothing to break
+    down, and showing it anyway would just be noise on every single-
+    platform person's line."""
+    parts = []
+    if xbox_count:
+        parts.append(f"{_PLATFORM_ICON['modern']} {xbox_count}")
+    if steam_count:
+        parts.append(f"{_PLATFORM_ICON['steam']} {steam_count}")
+    if len(parts) < 2:
+        return ""
+    return " (" + " · ".join(parts) + ")"
+
+
 def platform_tag(platform: str) -> str:
     """SPEC 9, M-Steam-2e — which platform an achievement came from, right
     in the message itself, not just inferred from context. Found live: a

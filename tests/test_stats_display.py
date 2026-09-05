@@ -127,6 +127,56 @@ async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:
     assert text.count("без названия") == 2
 
 
+async def test_counters_show_platform_breakdown_only_with_two_platforms(repo: Repo) -> None:
+    """2026-09-05 follow-up, reversal of "one combined number only" (SPEC 9,
+    M-Steam-2e): a parenthetical next to "Сегодня"/"За месяц", but only once
+    there's something to break down."""
+    await repo.ensure_user(1, "both")
+    await repo.link_xbox_account(1, XUID, "Both", 0)
+    await repo.link_platform_account(1, "steam", "76561197960287930", "BothSteam")
+    await repo.insert_new_achievements(XUID, [_achievement("1")], is_backfill=False)
+    await repo.insert_new_achievements_steam(
+        1,
+        "76561197960287930",
+        [
+            AchievementRow(
+                title_id="550",
+                achievement_id="s1",
+                name="s1",
+                description=None,
+                icon_url=None,
+                unlocked_at=utcnow().isoformat(timespec="seconds"),
+                gamerscore=0,
+                rarity_percent=None,
+                platform="steam",
+            )
+        ],
+        is_backfill=False,
+    )
+
+    user = await repo.get_user(1)
+    assert user is not None
+    text = await _build_stats_text(repo, user)
+
+    assert text is not None
+    today_line = next(line for line in text.split("\n") if line.startswith("Сегодня"))
+    assert "(🟢 1 · ⚫ 1)" in today_line
+
+
+async def test_counters_hide_breakdown_for_a_single_platform(repo: Repo) -> None:
+    await repo.ensure_user(1, "xboxonly")
+    await repo.link_xbox_account(1, XUID, "XboxOnly", 0)
+    await repo.insert_new_achievements(XUID, [_achievement("1")], is_backfill=False)
+
+    user = await repo.get_user(1)
+    assert user is not None
+    text = await _build_stats_text(repo, user)
+
+    assert text is not None
+    today_line = next(line for line in text.split("\n") if line.startswith("Сегодня"))
+    assert "🟢" not in today_line and "⚫" not in today_line
+
+
 async def test_games_list_includes_steam_games(repo: Repo) -> None:
     """Found live: the games table used to be `if target.xuid:` only (SPEC
     9, M-Steam-2c's own scoping note) — recent_games() itself was never

@@ -32,6 +32,12 @@ class Counters:
     # No lifetime total: seen_achievements is permanently best-effort (a
     # capped title_history, achievements with no unlock date), unlike these
     # two date-bounded counts — better absent than quietly wrong (SPEC 5.4).
+    # Behind `today`/`month`'s own combined total (2026-09-05 follow-up) —
+    # a parenthetical for reference, not a second sort key.
+    today_xbox: int = 0
+    today_steam: int = 0
+    month_xbox: int = 0
+    month_steam: int = 0
 
 
 def local_now(tz_offset_min: int | None, now: datetime | None = None) -> datetime:
@@ -59,6 +65,11 @@ def month_cutoff_utc(now: datetime | None = None) -> datetime:
 async def counters_for(repo: Repo, tg_id: int, now: datetime | None = None) -> Counters:
     """Summed across every platform the person has connected (SPEC 9,
     M-Steam-2e) — keyed by tg_id, not any one platform's own external id."""
-    today, today_score = await repo.achievement_counts_for_person(tg_id, today_cutoff_utc(now))
-    month, month_score = await repo.achievement_counts_for_person(tg_id, month_cutoff_utc(now))
-    return Counters(today, today_score, month, month_score)
+    today_cutoff, month_cutoff = today_cutoff_utc(now), month_cutoff_utc(now)
+    today, today_score = await repo.achievement_counts_for_person(tg_id, today_cutoff)
+    month, month_score = await repo.achievement_counts_for_person(tg_id, month_cutoff)
+    today_xbox, today_steam = await repo.achievement_platform_breakdown(tg_id, today_cutoff)
+    month_xbox, month_steam = await repo.achievement_platform_breakdown(tg_id, month_cutoff)
+    return Counters(
+        today, today_score, month, month_score, today_xbox, today_steam, month_xbox, month_steam
+    )
