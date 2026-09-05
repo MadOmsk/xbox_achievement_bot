@@ -69,13 +69,25 @@ async def panel_in_group(message: Message, bot: Bot) -> None:
     asyncio.create_task(_delete_later(bot, hint.chat.id, hint.message_id))  # noqa: RUF006
 
 
+async def _safe_edit(
+    callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None, **kwargs: object
+) -> None:
+    """Edit the callback's own message in place (2026-09-05 refactor — this
+    exact isinstance-check-then-suppress shape was duplicated across nine
+    handlers below). Swallows the two routine failures every one of them
+    already tolerated: the message isn't a real, editable Message, or
+    Telegram refuses an edit that changes nothing. Never calls
+    callback.answer() itself — callers still pick their own toast text
+    (or none), same as before."""
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(text, reply_markup=markup, **kwargs)
+
+
 @router.callback_query(F.data == "panel:refresh")
 async def panel_refresh(callback: CallbackQuery, repo: Repo) -> None:
     text, markup = await render_panel(repo, callback.from_user.id)
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            # Telegram rejects an edit that changes nothing; that is not an error.
-            await callback.message.edit_text(text, reply_markup=markup)
+    await _safe_edit(callback, text, markup)
     await callback.answer("Обновил")
 
 
@@ -136,17 +148,16 @@ async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
     if user is None or not user.xuid:
         await callback.answer("XBOX и так не подключён.", show_alert=True)
         return
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                "Отключить XBOX?\n\n"
-                "Удалю токен и подписки. Историю достижений оставлю — она нужна статистике "
-                "чата, и при повторном входе старые достижения не хлынут в чат заново.\n\n"
-                f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно "
-                f"только самому: {REVOKE_URL}",
-                reply_markup=disconnect_prompt_keyboard(from_panel=True),
-                disable_web_page_preview=True,
-            )
+    await _safe_edit(
+        callback,
+        "Отключить XBOX?\n\n"
+        "Удалю токен и подписки. Историю достижений оставлю — она нужна статистике "
+        "чата, и при повторном входе старые достижения не хлынут в чат заново.\n\n"
+        f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно "
+        f"только самому: {REVOKE_URL}",
+        disconnect_prompt_keyboard(from_panel=True),
+        disable_web_page_preview=True,
+    )
     await callback.answer()
 
 
@@ -155,9 +166,7 @@ async def panel_disconnect_cancel(callback: CallbackQuery, repo: Repo) -> None:
     # Cancelling here edits the panel message itself, so restore the panel
     # in place instead of leaving a throwaway "cancelled" message behind.
     text, markup = await render_panel(repo, callback.from_user.id)
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(text, reply_markup=markup)
+    await _safe_edit(callback, text, markup)
     await callback.answer()
 
 
@@ -166,19 +175,19 @@ async def panel_steam_disconnect_cancel(callback: CallbackQuery, repo: Repo) -> 
     """Same treatment as panel_disconnect_cancel above, for Steam's own
     disconnect button (2026-09-05 follow-up)."""
     text, markup = await render_panel(repo, callback.from_user.id)
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(text, reply_markup=markup)
+    await _safe_edit(callback, text, markup)
     await callback.answer()
 
 
 @router.callback_query(F.data == "panel:tz")
 async def panel_timezone(callback: CallbackQuery) -> None:
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            "🕐 Часовой пояс — по нему считаются «сегодня» и «за месяц».",
-            reply_markup=timezone_keyboard(skippable=False),
-        )
+    # Found while refactoring (2026-09-05): the one edit in this file that
+    # didn't tolerate a failed edit, unlike every other one here.
+    await _safe_edit(
+        callback,
+        "🕐 Часовой пояс — по нему считаются «сегодня» и «за месяц».",
+        timezone_keyboard(skippable=False),
+    )
     await callback.answer()
 
 
@@ -205,9 +214,7 @@ async def _redraw_chat_list(callback: CallbackQuery, repo: Repo) -> None:
             )
         )
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="panel:refresh"))
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await _safe_edit(callback, text, builder.as_markup())
     await callback.answer()
 
 
@@ -262,9 +269,7 @@ async def _redraw_chat_card(callback: CallbackQuery, repo: Repo, chat_id: int) -
         await _redraw_chat_list(callback, repo)
         return
     text, markup = built
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(text, reply_markup=markup)
+    await _safe_edit(callback, text, markup)
     await callback.answer()
 
 
@@ -301,14 +306,13 @@ async def panel_chat_digest_menu(callback: CallbackQuery, repo: Repo) -> None:
         await callback.answer()
         return
     current = chat.digest_threshold or 3
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                "Сводка вместо отдельных сообщений\n\n"
-                "Если за один раз в одной игре выбито столько достижений или больше — "
-                "в этот чат уйдёт одно сводное сообщение.",
-                reply_markup=digest_keyboard(current, chat_id),
-            )
+    await _safe_edit(
+        callback,
+        "Сводка вместо отдельных сообщений\n\n"
+        "Если за один раз в одной игре выбито столько достижений или больше — "
+        "в этот чат уйдёт одно сводное сообщение.",
+        digest_keyboard(current, chat_id),
+    )
     await callback.answer()
 
 
@@ -353,12 +357,9 @@ async def panel_chat_unsub_prompt(callback: CallbackQuery, repo: Repo) -> None:
         InlineKeyboardButton(text="Да, отписаться", callback_data=f"panel:chatunsuby:{chat_id}")
     )
     builder.row(InlineKeyboardButton(text="Отмена", callback_data=f"panel:chat:{chat_id}"))
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                f"Перестать публиковать твои достижения в «{title}»?",
-                reply_markup=builder.as_markup(),
-            )
+    await _safe_edit(
+        callback, f"Перестать публиковать твои достижения в «{title}»?", builder.as_markup()
+    )
     await callback.answer()
 
 
@@ -383,13 +384,12 @@ async def panel_chat_delete_prompt(callback: CallbackQuery, repo: Repo) -> None:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Да, удалить", callback_data=f"panel:chatdely:{chat_id}"))
     builder.row(InlineKeyboardButton(text="Отмена", callback_data=f"panel:chat:{chat_id}"))
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                f"Убрать «{title}» из списка? Как будто ты там никогда не был — "
-                "не бан, снова окажешься в списке, если подпишешься или напишешь туда.",
-                reply_markup=builder.as_markup(),
-            )
+    await _safe_edit(
+        callback,
+        f"Убрать «{title}» из списка? Как будто ты там никогда не был — "
+        "не бан, снова окажешься в списке, если подпишешься или напишешь туда.",
+        builder.as_markup(),
+    )
     await callback.answer()
 
 
@@ -497,12 +497,3 @@ async def _delete_later(bot: Bot, chat_id: int, message_id: int) -> None:
 
 def _username(message: Message) -> str | None:
     return message.from_user.username if message.from_user else None
-
-
-async def _redraw(callback: CallbackQuery, repo: Repo) -> None:
-    text, markup = await render_panel(repo, callback.from_user.id)
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            # Telegram rejects an edit that changes nothing; not an error.
-            await callback.message.edit_text(text, reply_markup=markup)
-    await callback.answer()
