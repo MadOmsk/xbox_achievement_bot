@@ -9,12 +9,7 @@ can build the same text.
 from __future__ import annotations
 
 from bot.db.repo import ChatPresenceRow
-
-# Same palette as /stats' header and its games list (handlers/chat.py's own
-# _PLATFORM_ICON, services/achievements.py's own copy) — duplicated, not
-# imported: services must not depend on handlers (CLAUDE.md's layering rule
-# runs one way only), and each copy needs slightly different fallbacks.
-_PLATFORM_ICON = {"modern": "🟢", "steam": "⚫", "psn": "🔵"}
+from bot.services.achievements import PLATFORM_ICON
 
 
 def presence_text(row: ChatPresenceRow) -> str:
@@ -34,7 +29,7 @@ def presence_icon(row: ChatPresenceRow) -> str:
     # glance, losing the one signal a colour is actually good for.
     if row.state != "Online":
         return "⚪"
-    return _PLATFORM_ICON.get(row.platform, "⚪")
+    return PLATFORM_ICON.get(row.platform, "⚪")
 
 
 def render_online_table(rows: list[ChatPresenceRow], updated_label: str) -> str:

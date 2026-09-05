@@ -35,8 +35,10 @@ log = logging.getLogger(__name__)
 
 router = Router(name="hltb")
 
-DEFAULT_RESULTS_LIMIT = "20"
-DEFAULT_PAGE_SIZE = "5"
+RESULTS_LIMIT_KEY = "hltb_results_limit"
+PAGE_SIZE_KEY = "hltb_page_size"
+DEFAULT_RESULTS_LIMIT = 20
+DEFAULT_PAGE_SIZE = 5
 # Generous — the reply-to-message check is the real guard against a stray
 # match, this is just a backstop against sessions piling up forever.
 SESSION_TTL_SECONDS = 1800
@@ -75,8 +77,8 @@ async def hltb_command(message: Message, repo: Repo) -> None:
         return
     # Only meaningful in a group: a DM's chat_id is the asker's own tg_id,
     # which never has subscriptions/chat_seen rows of its own.
-    limit = await _int_setting(repo, "hltb_results_limit", DEFAULT_RESULTS_LIMIT)
-    page_size = await _int_setting(repo, "hltb_page_size", DEFAULT_PAGE_SIZE)
+    limit = await repo.get_int_setting(RESULTS_LIMIT_KEY, DEFAULT_RESULTS_LIMIT)
+    page_size = await repo.get_int_setting(PAGE_SIZE_KEY, DEFAULT_PAGE_SIZE)
     recent = await repo.chat_recent_games(message.chat.id, limit)
 
     text = "Название игры? Точное не нужно — покажу варианты."
@@ -94,14 +96,6 @@ async def hltb_command(message: Message, repo: Repo) -> None:
         prompt_text=text,
         recent_games=recent,
     )
-
-
-async def _int_setting(repo: Repo, key: str, default: str) -> int:
-    raw = await repo.get_app_setting(key, default)
-    try:
-        return int(raw or default)
-    except ValueError:
-        return int(default)
 
 
 def _nav_row(page: int, pages: int, page_prefix: str) -> list[InlineKeyboardButton]:

@@ -8,6 +8,7 @@ handler can forget it.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
 
 from aiogram import Bot, F, Router
@@ -24,12 +25,19 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import Settings
 from bot.db.repo import AdminUserRow, ChatTarget, Repo
+from bot.handlers.hltb import (
+    DEFAULT_PAGE_SIZE,
+    DEFAULT_RESULTS_LIMIT,
+    PAGE_SIZE_KEY,
+    RESULTS_LIMIT_KEY,
+)
 from bot.handlers.keyboards import (
     COMMON_OFFSETS_HOURS,
     format_offset,
     format_rarity,
     next_rarity_mode,
 )
+from bot.poller.daily import DEFAULT_TABLE_TOP, TOP_LIMIT_KEY
 from bot.poller.fetcher import Fetcher
 from bot.poller.message_cleanup import DEFAULT_TTL_MINUTES as DEFAULT_SYSTEM_MESSAGE_TTL_MIN
 from bot.poller.message_cleanup import TTL_SETTING_KEY as SYSTEM_MESSAGE_TTL_KEY
@@ -110,64 +118,84 @@ LIMIT_MAX = 50
 DEFAULT_RARITY_MODE_KEY = "default_rarity_mode"
 DEFAULT_RARITY_MODE_DEFAULT = "all"
 
-_LIMIT_LABELS = {
-    "summary_top_limit": "Строк в /summary",
-    "stats_games_limit": "Игр в /stats",
-    "hltb_results_limit": "Результатов поиска и подсказок HLTB",
-    "hltb_page_size": "Результатов на странице (HLTB)",
-    SYSTEM_MESSAGE_TTL_KEY: "Автоудаление системных сообщений (мин)",
-    ONLINE_REFRESH_INTERVAL_KEY: "Интервал автообновления /online (мин)",
-    ONLINE_REFRESH_TTL_KEY: "Автообновление /online, часов",
-}
-_LIMIT_DEFAULTS = {
-    "summary_top_limit": "15",
-    "stats_games_limit": "15",
-    "hltb_results_limit": "20",
-    "hltb_page_size": "5",
-    SYSTEM_MESSAGE_TTL_KEY: str(DEFAULT_SYSTEM_MESSAGE_TTL_MIN),
-    ONLINE_REFRESH_INTERVAL_KEY: str(DEFAULT_ONLINE_REFRESH_MIN),
-    ONLINE_REFRESH_TTL_KEY: str(DEFAULT_ONLINE_REFRESH_TTL_HOURS),
-}
-# hltb_page_size feeds Telegram inline-keyboard rows directly — 50 buttons on
-# one page would be unusable, unlike the other two below (a list inside a
-# collapsible quote, SPEC 1.6, not a keyboard grid).
-_LIMIT_MAX_OVERRIDES = {
-    "hltb_page_size": 10,
-    SYSTEM_MESSAGE_TTL_KEY: 60,
-    ONLINE_REFRESH_INTERVAL_KEY: 60,
-    ONLINE_REFRESH_TTL_KEY: 24,
-}
-# summary_top_limit/stats_games_limit render into a <blockquote expandable>
-# now, not a fixed-width table — an "unlimited" list fits there just fine
-# (SPEC 1.6), so these two alone allow 0 for "no cap". hltb's two stay at 1:
-# a page size or a search pool of 0 is just broken, not "show everything".
-# system_message_ttl_min/online_refresh_interval_min's own 0 means something
-# else again — "off", not "no cap" — see _ZERO_LABELS below. online_refresh_
-# ttl_hours stays at the default min (1): a 0-hour window is just "off"
-# spelled a more confusing way than the interval's own off switch already is.
-_LIMIT_MIN_OVERRIDES = {
-    "summary_top_limit": 0,
-    "stats_games_limit": 0,
-    SYSTEM_MESSAGE_TTL_KEY: 0,
-    ONLINE_REFRESH_INTERVAL_KEY: 0,
-}
-
 UNLIMITED_LABEL = "без ограничения"
-_ZERO_LABELS = {SYSTEM_MESSAGE_TTL_KEY: "выключено", ONLINE_REFRESH_INTERVAL_KEY: "выключено"}
+
+# stats_games_limit's own (key, default) belong to handlers/chat.py by rights
+# (same as the other five, each imported from wherever it actually lives) —
+# but chat.py already imports IsAdmin from this module, so importing back
+# from chat.py here would be circular. Duplicated on purpose, just this one.
+_STATS_GAMES_LIMIT_KEY = "stats_games_limit"
+_DEFAULT_STATS_GAMES_LIMIT = 15
+
+
+@dataclass(frozen=True, slots=True)
+class NumericSetting:
+    """One row of the "type a number" admin flow (2026-09-05 refactor —
+    replaces five parallel dicts, all keyed by the same setting names, with
+    one). `zero_label` only matters when `min == 0`; a setting that doesn't
+    allow 0 never reaches _format_limit's zero branch at all."""
+
+    label: str
+    default: int
+    min: int = LIMIT_MIN
+    max: int = LIMIT_MAX
+    zero_label: str = UNLIMITED_LABEL
+
+
+# Every admin-configurable count/limit/interval in the bot, one place —
+# each (key, default) pair still lives with the code that actually falls
+# back to it (imported above), so this registry can't drift from reality
+# the way five hand-typed dicts eventually would have.
+NUMERIC_SETTINGS: dict[str, NumericSetting] = {
+    TOP_LIMIT_KEY: NumericSetting("Строк в /summary", DEFAULT_TABLE_TOP, min=0),
+    # SPEC 1.6: both render into a <blockquote expandable>, not a fixed-width
+    # table — an "unlimited" list fits there just fine, so these two alone
+    # allow 0 for "no cap". Everything else below stays at min=1: a page
+    # size or a search pool of 0 is just broken, not "show everything".
+    _STATS_GAMES_LIMIT_KEY: NumericSetting(
+        "Игр в /stats", _DEFAULT_STATS_GAMES_LIMIT, min=0
+    ),
+    RESULTS_LIMIT_KEY: NumericSetting("Результатов поиска и подсказок HLTB", DEFAULT_RESULTS_LIMIT),
+    # Feeds Telegram inline-keyboard rows directly — 50 buttons on one page
+    # would be unusable, unlike the two above.
+    PAGE_SIZE_KEY: NumericSetting("Результатов на странице (HLTB)", DEFAULT_PAGE_SIZE, max=10),
+    # These two's own 0 means something else again — "off", not "no cap".
+    SYSTEM_MESSAGE_TTL_KEY: NumericSetting(
+        "Автоудаление системных сообщений (мин)",
+        DEFAULT_SYSTEM_MESSAGE_TTL_MIN,
+        min=0,
+        max=60,
+        zero_label="выключено",
+    ),
+    ONLINE_REFRESH_INTERVAL_KEY: NumericSetting(
+        "Интервал автообновления /online (мин)",
+        DEFAULT_ONLINE_REFRESH_MIN,
+        min=0,
+        max=60,
+        zero_label="выключено",
+    ),
+    # Stays at the default min (1): a 0-hour window is just "off" spelled a
+    # more confusing way than the interval's own off switch already is.
+    ONLINE_REFRESH_TTL_KEY: NumericSetting(
+        "Автообновление /online, часов", DEFAULT_ONLINE_REFRESH_TTL_HOURS, max=24
+    ),
+}
 
 
 def _format_limit(key: str, value: str) -> str:
-    return _ZERO_LABELS.get(key, UNLIMITED_LABEL) if value == "0" else value
+    spec = NUMERIC_SETTINGS[key]
+    return spec.zero_label if value == "0" else value
 
 
 @router.callback_query(F.data == "a:limits")
 async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
     builder = InlineKeyboardBuilder()
-    for key, label in _LIMIT_LABELS.items():
-        current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
+    for key, spec in NUMERIC_SETTINGS.items():
+        current = await repo.get_app_setting(key, str(spec.default))
         builder.row(
             InlineKeyboardButton(
-                text=f"{label}: {_format_limit(key, current)} ▸", callback_data=f"a:limit:{key}"
+                text=f"{spec.label}: {_format_limit(key, current)} ▸",
+                callback_data=f"a:limit:{key}",
             )
         )
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
@@ -184,18 +212,16 @@ async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
 async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
     assert callback.data is not None
     key = callback.data.rsplit(":", 1)[1]
-    label = _LIMIT_LABELS[key]
-    current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
+    spec = NUMERIC_SETTINGS[key]
+    current = await repo.get_app_setting(key, str(spec.default))
     _awaiting_input[callback.from_user.id] = (key, None)
-    limit_min = _LIMIT_MIN_OVERRIDES.get(key, LIMIT_MIN)
-    limit_max = _LIMIT_MAX_OVERRIDES.get(key, LIMIT_MAX)
-    zero_hint = f" (0 — {_ZERO_LABELS.get(key, UNLIMITED_LABEL)})" if limit_min == 0 else ""
+    zero_hint = f" (0 — {spec.zero_label})" if spec.min == 0 else ""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:limits"))
     await _redraw(
         callback,
-        f"{label}: {_format_limit(key, current)}\n\n"
-        f"Пришли новое значение целым числом, от {limit_min} до {limit_max}{zero_hint}.",
+        f"{spec.label}: {_format_limit(key, current)}\n\n"
+        f"Пришли новое значение целым числом, от {spec.min} до {spec.max}{zero_hint}.",
         builder.as_markup(),
     )
 
@@ -228,13 +254,12 @@ async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) 
         await message.answer("Здесь только целое число. Ещё раз?")
         return
     value_int = int(message.text)
-    limit_min = _LIMIT_MIN_OVERRIDES.get(key, LIMIT_MIN)
-    limit_max = _LIMIT_MAX_OVERRIDES.get(key, LIMIT_MAX)
-    if not (limit_min <= value_int <= limit_max):
-        await message.answer(f"Число должно быть от {limit_min} до {limit_max}. Ещё раз?")
+    spec = NUMERIC_SETTINGS[key]
+    if not (spec.min <= value_int <= spec.max):
+        await message.answer(f"Число должно быть от {spec.min} до {spec.max}. Ещё раз?")
         return
     stored = str(value_int)
-    confirm = f"{_LIMIT_LABELS[key]}: {_format_limit(key, stored)}"
+    confirm = f"{spec.label}: {_format_limit(key, stored)}"
 
     del _awaiting_input[message.from_user.id]
     await repo.set_app_setting(key, stored, message.from_user.id)

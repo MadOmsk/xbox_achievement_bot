@@ -6,8 +6,8 @@ site. Locked down here after chasing the opposite assumption for a while."""
 
 from __future__ import annotations
 
-from bot.db.repo import AchievementRow, Repo
-from bot.handlers.chat import _build_stats_text
+from bot.db.repo import AchievementRow, Repo, TopGame
+from bot.handlers.chat import _build_stats_text, _games_list
 from bot.util import utcnow
 
 XUID = "xuid-profile-check"
@@ -106,6 +106,15 @@ async def test_steam_line_shows_its_own_lifetime_achievement_count(repo: Repo) -
     steam_line = next(line for line in text.split("\n") if line.startswith("⚫"))
     assert "SteamPerson" in steam_line
     assert "2 достижения" in steam_line
+
+
+def test_games_list_colours_x360_the_same_as_modern_xbox() -> None:
+    """Found live (2026-09-05 platform-icon refactor): chat.py's own
+    _PLATFORM_ICON copy never had an "x360" key at all, so an Xbox 360
+    game silently got no icon here — unlike services/achievements.py's own
+    copy, used everywhere else, which always has. Both now share one dict."""
+    line = _games_list([TopGame(name="Fallout 3", gamerscore=100, unlocked=5, platform="x360")])
+    assert "🟢 Fallout 3" in line
 
 
 async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:

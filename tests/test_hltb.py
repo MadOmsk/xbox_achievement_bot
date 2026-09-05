@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 
 from bot.db.repo import HltbCacheRow, Repo, TitleHistoryRow
-from bot.handlers.hltb import _card, _int_setting, _label, _recent_keyboard, _results_keyboard
+from bot.handlers.hltb import _card, _label, _recent_keyboard, _results_keyboard
 from bot.services.hltb import (
     HltbResult,
     _clean,
@@ -282,13 +282,13 @@ def test_recent_keyboard_has_no_nav_row_for_a_single_page() -> None:
 
 
 async def test_hltb_limits_are_admin_configurable(repo: Repo) -> None:
-    assert await _int_setting(repo, "hltb_results_limit", "20") == 20  # default
+    assert await repo.get_int_setting("hltb_results_limit", 20) == 20  # default
     await repo.set_app_setting("hltb_results_limit", "7")
-    assert await _int_setting(repo, "hltb_results_limit", "20") == 7
+    assert await repo.get_int_setting("hltb_results_limit", 20) == 7
 
-    assert await _int_setting(repo, "hltb_page_size", "5") == 5  # default
+    assert await repo.get_int_setting("hltb_page_size", 5) == 5  # default
     await repo.set_app_setting("hltb_page_size", "3")
-    assert await _int_setting(repo, "hltb_page_size", "5") == 3
+    assert await repo.get_int_setting("hltb_page_size", 5) == 3
 
 
 async def test_hltb_cache_round_trip(repo: Repo) -> None:

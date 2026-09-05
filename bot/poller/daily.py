@@ -30,6 +30,7 @@ DAY_WINDOW_HOURS = 24
 # calendar boundary would cut the window at an arbitrary moment and give every
 # member a different "this month" depending on when they check.
 MONTH_WINDOW_DAYS = 30
+TOP_LIMIT_KEY = "summary_top_limit"
 DEFAULT_TABLE_TOP = 15
 MONTHS = (
     "января",
@@ -94,11 +95,7 @@ class DailySummary:
 
 
 async def current_top_limit(repo: Repo) -> int:
-    raw = await repo.get_app_setting("summary_top_limit", str(DEFAULT_TABLE_TOP))
-    try:
-        return int(raw or DEFAULT_TABLE_TOP)
-    except ValueError:
-        return DEFAULT_TABLE_TOP
+    return await repo.get_int_setting(TOP_LIMIT_KEY, DEFAULT_TABLE_TOP)
 
 
 async def build_summary(

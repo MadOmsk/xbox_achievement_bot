@@ -34,7 +34,13 @@ from bot.db.repo import PlatformLink, RecentAchievement, Repo, TopGame, User
 from bot.handlers.admin import IsAdmin
 from bot.poller.daily import build_summary, full_leaderboard
 from bot.poller.online_refresh import refresh_interval_minutes
-from bot.services.achievements import platform_breakdown_suffix, plural_achievements, rarity_badge
+from bot.services.achievements import (
+    PLATFORM_ICON,
+    PLATFORM_LABEL,
+    platform_breakdown_suffix,
+    plural_achievements,
+    rarity_badge,
+)
 from bot.services.message_log import stats_category
 from bot.services.online_view import render_online_table
 from bot.services.stats import counters_for, local_now
@@ -185,20 +191,12 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
 
 def _games_list(games: list[TopGame]) -> str:
     rows = [
-        f"{place}. {_PLATFORM_ICON.get(game.platform, '')} "
+        f"{place}. {PLATFORM_ICON.get(game.platform, '')} "
         f"{html_escape(truncate_name(game.name or 'без названия'))} — "
         f"{game.unlocked or 0} ач. (+{thousands(game.gamerscore or 0)} G)"
         for place, game in enumerate(games, start=1)
     ]
     return blockquote(rows)
-
-
-# Marker circles for /stats' header and its games list (SPEC 9, M-Steam-2e)
-# — /online's own copy moved to services/online_view.py (Follow-up
-# 2026-09-05, needed there too, from the auto-refresh poller). PlayStation
-# isn't linkable yet, kept for when it is.
-_PLATFORM_ICON = {"modern": "🟢", "steam": "⚫", "psn": "🔵"}
-_PLATFORM_LABEL = {"steam": "Steam", "psn": "PlayStation"}
 
 
 def _display_name(target: User, links: list[PlatformLink]) -> str:
@@ -224,12 +222,12 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
     lines = [f"📊 <b>{html_escape(_display_name(target, platform_links))}</b>"]
     if target.xuid:
         lines.append(
-            f"{_PLATFORM_ICON['modern']} XBOX: {html_escape(target.gamertag or 'без геймертега')}"
+            f"{PLATFORM_ICON['modern']} XBOX: {html_escape(target.gamertag or 'без геймертега')}"
             f"  ·  gamerscore {thousands(target.gamerscore or 0)}"
         )
     for link in platform_links:
-        icon = _PLATFORM_ICON.get(link.platform, "⚪")
-        label = _PLATFORM_LABEL.get(link.platform, link.platform)
+        icon = PLATFORM_ICON.get(link.platform, "⚪")
+        label = PLATFORM_LABEL.get(link.platform, link.platform)
         # A lifetime count is fine here, unlike Xbox's own seen_achievements
         # count above (deliberately never shown as a lifetime total, SPEC
         # 5.4: title_history is capped, so any count derived from it could
@@ -280,12 +278,12 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
     return "\n".join(lines)
 
 
+STATS_GAMES_LIMIT_KEY = "stats_games_limit"
+DEFAULT_STATS_GAMES_LIMIT = 15
+
+
 async def _stats_games_limit(repo: Repo) -> int:
-    raw = await repo.get_app_setting("stats_games_limit", "15")
-    try:
-        return int(raw or 15)
-    except ValueError:
-        return 15
+    return await repo.get_int_setting(STATS_GAMES_LIMIT_KEY, DEFAULT_STATS_GAMES_LIMIT)
 
 
 @router.message(Command("stats"))
@@ -496,7 +494,7 @@ def _recent_row(row: RecentAchievement) -> str:
     badge = rarity_badge(row.rarity_percent)
     gamertag = html_escape(truncate_name(row.gamertag or "кто-то"))
     game = html_escape(truncate_name(row.game or "без названия"))
-    icon = _PLATFORM_ICON.get(row.platform, "⚪")
+    icon = PLATFORM_ICON.get(row.platform, "⚪")
     # Found live: every Steam row showed a flat "+0 G" — Steam achievements
     # have no gamerscore at all (services/steam/achievements.py), same
     # "0 is 0 on any platform, don't name it" rule the achievement message

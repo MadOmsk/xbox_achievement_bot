@@ -26,11 +26,7 @@ TTL_SETTING_KEY = "system_message_ttl_min"
 
 
 async def system_message_ttl_minutes(repo: Repo) -> int:
-    raw = await repo.get_app_setting(TTL_SETTING_KEY, str(DEFAULT_TTL_MINUTES))
-    try:
-        return int(raw or DEFAULT_TTL_MINUTES)
-    except ValueError:
-        return DEFAULT_TTL_MINUTES
+    return await repo.get_int_setting(TTL_SETTING_KEY, DEFAULT_TTL_MINUTES)
 
 
 class MessageCleanup:

@@ -38,19 +38,11 @@ TTL_HOURS_KEY = "online_refresh_ttl_hours"
 
 
 async def refresh_interval_minutes(repo: Repo) -> int:
-    raw = await repo.get_app_setting(REFRESH_INTERVAL_KEY, str(DEFAULT_REFRESH_INTERVAL_MIN))
-    try:
-        return int(raw or DEFAULT_REFRESH_INTERVAL_MIN)
-    except ValueError:
-        return DEFAULT_REFRESH_INTERVAL_MIN
+    return await repo.get_int_setting(REFRESH_INTERVAL_KEY, DEFAULT_REFRESH_INTERVAL_MIN)
 
 
 async def ttl_hours(repo: Repo) -> int:
-    raw = await repo.get_app_setting(TTL_HOURS_KEY, str(DEFAULT_TTL_HOURS))
-    try:
-        return int(raw or DEFAULT_TTL_HOURS)
-    except ValueError:
-        return DEFAULT_TTL_HOURS
+    return await repo.get_int_setting(TTL_HOURS_KEY, DEFAULT_TTL_HOURS)
 
 
 class OnlineAutoRefresh:

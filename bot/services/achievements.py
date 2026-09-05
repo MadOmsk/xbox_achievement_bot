@@ -25,12 +25,14 @@ def rarity_badge(rarity_percent: float | None) -> str:
     return "🏆"
 
 
-# Same palette as /stats' and /online's platform circles (handlers/chat.py)
-# — duplicated rather than imported, since services must never depend on
-# handlers (CLAUDE.md's layering rule runs one way only). Labels are needed
-# here and not there, so the two dicts aren't identical either.
-_PLATFORM_ICON = {"modern": "🟢", "x360": "🟢", "steam": "⚫", "psn": "🔵"}
-_PLATFORM_LABEL = {"modern": "XBOX", "x360": "XBOX 360", "steam": "Steam", "psn": "PlayStation"}
+# The one canonical platform palette (2026-09-05 refactor — chat.py and
+# online_view.py used to keep their own, smaller copies with no "x360" key
+# at all, so an Xbox 360 game silently got no icon in /stats' games list and
+# no colour in presence rows; both now import this one instead). Public
+# names, not underscore-prefixed: this module is the home for them, other
+# services are allowed to depend on it (only handlers->services is one-way).
+PLATFORM_ICON = {"modern": "🟢", "x360": "🟢", "steam": "⚫", "psn": "🔵"}
+PLATFORM_LABEL = {"modern": "XBOX", "x360": "XBOX 360", "steam": "Steam", "psn": "PlayStation"}
 
 
 def platform_breakdown_suffix(xbox_count: int, steam_count: int, *, always: bool = False) -> str:
@@ -52,9 +54,9 @@ def platform_breakdown_suffix(xbox_count: int, steam_count: int, *, always: bool
     zero-achievement row)."""
     parts = []
     if xbox_count:
-        parts.append(f"{_PLATFORM_ICON['modern']} {xbox_count}")
+        parts.append(f"{PLATFORM_ICON['modern']} {xbox_count}")
     if steam_count:
-        parts.append(f"{_PLATFORM_ICON['steam']} {steam_count}")
+        parts.append(f"{PLATFORM_ICON['steam']} {steam_count}")
     if not parts or (len(parts) < 2 and not always):
         return ""
     return " (" + " · ".join(parts) + ")"
@@ -65,8 +67,8 @@ def platform_tag(platform: str) -> str:
     in the message itself, not just inferred from context. Found live: a
     Steam achievement arriving with no platform mention at all reads the
     same as any other message, easy to miss."""
-    icon = _PLATFORM_ICON.get(platform, "⚪")
-    label = _PLATFORM_LABEL.get(platform, platform)
+    icon = PLATFORM_ICON.get(platform, "⚪")
+    label = PLATFORM_LABEL.get(platform, platform)
     return f"{icon} {label}"
 
 

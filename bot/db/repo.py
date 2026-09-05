@@ -529,6 +529,21 @@ class Repo:
         row = await cursor.fetchone()
         return row["value"] if row else default
 
+    async def get_int_setting(self, key: str, default: int) -> int:
+        """The "read an admin-configurable count/limit/interval, fall back
+        on garbage" pattern every one of them needed (2026-09-05 refactor —
+        six near-identical try/except ValueError blocks collapsed into
+        one: chat.py's stats_games_limit, daily.py's summary_top_limit,
+        hltb.py's two, message_cleanup.py's TTL, online_refresh.py's two).
+        A stored value is always a plain digit string set through
+        set_app_setting's own numeric flow (admin.py), so the only way
+        `int()` fails here is a hand-edited or pre-migration row."""
+        raw = await self.get_app_setting(key, str(default))
+        try:
+            return int(raw or default)
+        except ValueError:
+            return default
+
     async def set_app_setting(self, key: str, value: str, updated_by: int | None = None) -> None:
         await self._conn.execute(
             "INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES (?, ?, ?, ?) "
