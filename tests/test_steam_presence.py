@@ -86,6 +86,58 @@ async def test_tick_polls_a_freshly_started_game(
     assert presence[0].gameid == "550"
 
 
+async def test_tick_touches_last_online_while_online(
+    repo: Repo, settings: Settings, monkeypatch
+) -> None:
+    """Found while adding Steam to the admin panel (2026-09-05): only
+    presence.py (Xbox) ever called this — a Steam-only person's "last
+    online" stayed permanently blank in the admin users list."""
+    await _linked_user(repo)
+    steam_settings = _steam_settings(settings)
+
+    async def fake_batch(api_key, steam_ids):
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID,
+                persona_name="Mad Omsk",
+                persona_state=1,  # online
+                gameid=None,
+                game_name=None,
+            )
+        }
+
+    monkeypatch.setattr(steam_presence_module, "get_presence_batch", fake_batch)
+    poller = SteamPresencePoller(steam_settings, repo, FakeFetcher())  # type: ignore[arg-type]
+
+    await poller.tick()
+
+    user = await repo.get_user(TG_ID)
+    assert user is not None and user.last_online_at is not None
+
+
+async def test_tick_does_not_touch_last_online_while_offline(
+    repo: Repo, settings: Settings, monkeypatch
+) -> None:
+    await _linked_user(repo)
+    steam_settings = _steam_settings(settings)
+
+    async def fake_batch(api_key, steam_ids):
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID, persona_name="Mad Omsk", persona_state=0, gameid=None,
+                game_name=None,
+            )
+        }
+
+    monkeypatch.setattr(steam_presence_module, "get_presence_batch", fake_batch)
+    poller = SteamPresencePoller(steam_settings, repo, FakeFetcher())  # type: ignore[arg-type]
+
+    await poller.tick()
+
+    user = await repo.get_user(TG_ID)
+    assert user is not None and user.last_online_at is None
+
+
 async def test_tick_does_a_final_poll_of_the_old_game_when_it_changes(
     repo: Repo, settings: Settings, monkeypatch
 ) -> None:

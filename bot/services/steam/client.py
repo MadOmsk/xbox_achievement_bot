@@ -21,9 +21,29 @@ from dataclasses import dataclass
 
 import httpx
 
+from bot.services.rate_limiter import RateLimiter
+
 BASE_URL = "https://api.steampowered.com"
 MAX_ATTEMPTS = 3
 REQUEST_TIMEOUT = 10.0
+
+# Valve's own documented cap is the only official number: 100,000 calls a
+# day per key, no published per-second limit (2026-09-05, admin panel
+# diagnostic — mirrors xbox/client.py's own RateLimiter, moved to a shared
+# module for exactly this). The bot's actual traffic sits nowhere near this
+# even in the busiest realistic case (batched presence + debounced
+# achievement polling for ~30 people) — same "guard against a bug, not a
+# real budget" reasoning as Xbox's own window. No process-wide lock is
+# needed beyond RateLimiter's own: every Steam call in this bot already
+# goes through this one module-level function.
+RATE_WINDOWS: tuple[tuple[int, float], ...] = ((100_000, 86400.0),)
+_limiter = RateLimiter(RATE_WINDOWS)
+
+
+def rate_limit_usage() -> list[tuple[int, int, float]]:
+    """(used, limit, window_seconds) — the admin panel's Steam counterpart
+    to XboxClient.rate_limit_usage()."""
+    return _limiter.usage()
 
 # communityvisibilitystate: 1 = private, 2 = friends only, 3 = public.
 _PUBLIC = 3
@@ -256,6 +276,7 @@ async def _get(path: str, api_key: str, params: dict[str, str]) -> dict:
     query = {"format": "json", **params}
     if api_key:
         query["key"] = api_key
+    await _limiter.acquire()
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:

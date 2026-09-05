@@ -46,6 +46,7 @@
 │   │   ├── online_view.py        — рендер таблицы /online, общий для команды и автообновления
 │   │   ├── notify.py             — уведомления администратору
 │   │   ├── crypto.py             — шифрование refresh-токенов (Fernet)
+│   │   ├── rate_limiter.py       — общий sliding-window лимитер (Xbox и Steam клиенты)
 │   │   ├── xbox/                 — всё про Xbox Live, ничего про Telegram
 │   │   │   ├── auth.py            — обёртка над xbox-webapi-python: токены, обновление
 │   │   │   ├── client.py          — запросы к Xbox Live, лимитер, retry, backoff
@@ -125,6 +126,7 @@
 │   ├── test_panel.py              — личная панель, «Мои чаты»
 │   ├── test_user_chats.py         — «Мои чаты»: список, подписка/отписка, rarity_mode по чату
 │   ├── test_admin.py              — форматирование лимитов API, границы настроек
+│   ├── test_admin_steam.py        — Steam-only в admin_users/_card, счётчики, кружки платформ
 │   ├── test_connect_service.py    — сквозной проброс origin_chat_id при входе
 │   ├── test_connect_payload.py    — разбор deep-link пейлоада /start
 │   ├── test_notify.py             — уведомления администратору

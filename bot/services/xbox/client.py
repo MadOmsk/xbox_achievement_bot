@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
 from xbox.webapi.api.client import XboxLiveClient
 
+from bot.services.rate_limiter import RateLimiter
 from bot.services.xbox.auth import XboxAuthService
 from bot.services.xbox.models import (
     ParsedAchievement,
@@ -79,47 +79,10 @@ class TitleHistoryEntry:
     icon_url: str | None = None
 
 
-class RateLimiter:
-    """Sliding windows, shared by every user of the bot."""
-
-    def __init__(self, windows: tuple[tuple[int, float], ...] = RATE_WINDOWS) -> None:
-        self._windows = [(limit, span, deque[float]()) for limit, span in windows]
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        while True:
-            async with self._lock:
-                now = asyncio.get_running_loop().time()
-                wait = 0.0
-                for limit, span, calls in self._windows:
-                    while calls and now - calls[0] > span:
-                        calls.popleft()
-                    if len(calls) >= limit:
-                        wait = max(wait, span - (now - calls[0]))
-                if wait <= 0:
-                    for _, _, calls in self._windows:
-                        calls.append(now)
-                    return
-            log.debug("rate limiter sleeping for %.1fs", wait)
-            await asyncio.sleep(wait)
-
-    def usage(self) -> list[tuple[int, int, float]]:
-        """A snapshot of (used, limit, window_seconds) per window, for the
-        admin panel's API diagnostic (SPEC 6.4) — a read, not an acquire, so
-        checking it never itself counts against the budget."""
-        now = asyncio.get_running_loop().time()
-        result = []
-        for limit, span, calls in self._windows:
-            while calls and now - calls[0] > span:
-                calls.popleft()
-            result.append((len(calls), limit, span))
-        return result
-
-
 class XboxClient:
     def __init__(self, auth: XboxAuthService, limiter: RateLimiter | None = None) -> None:
         self._auth = auth
-        self._limiter = limiter or RateLimiter()
+        self._limiter = limiter or RateLimiter(RATE_WINDOWS)
 
     def rate_limit_usage(self) -> list[tuple[int, int, float]]:
         """(used, limit, window_seconds) for each achievements-service window

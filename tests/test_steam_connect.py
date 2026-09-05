@@ -18,6 +18,7 @@ from bot.handlers.steam import (
     _STEAM_LINK_PATTERN,
     AwaitingSteamLink,
     _awaiting_link,
+    _unresolved_profile_hint,
     prompt_for_link,
 )
 
@@ -70,6 +71,22 @@ def test_steam_link_pattern_matches_a_real_url_with_scheme() -> None:
     magic = F.text.regexp(_STEAM_LINK_PATTERN, mode="search")
     event = SimpleNamespace(text="https://steamcommunity.com/id/oiwio")
     assert magic.resolve(event)
+
+
+def test_unresolved_hint_adds_the_nickname_explanation_for_a_bare_word() -> None:
+    """2026-09-05 follow-up: Steam has no way to search by display name,
+    only by the profile's custom URL slug — a bare word that isn't a link
+    gets told this explicitly instead of just "not found"."""
+    hint = _unresolved_profile_hint("CoolGamer123")
+    assert "не по имени в клиенте" in hint
+    assert "steamcommunity.com/id/gaben" in hint
+
+
+def test_unresolved_hint_skips_the_nickname_explanation_for_a_real_link() -> None:
+    """A real link that still failed to resolve (typo, deleted profile) —
+    the nickname caveat would be misleading noise here."""
+    hint = _unresolved_profile_hint("https://steamcommunity.com/id/typo123")
+    assert "не по имени в клиенте" not in hint
 
 
 async def test_prompt_replies_not_configured_without_arming(

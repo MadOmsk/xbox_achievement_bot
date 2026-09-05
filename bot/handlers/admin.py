@@ -45,6 +45,7 @@ from bot.poller.online_refresh import DEFAULT_REFRESH_INTERVAL_MIN as DEFAULT_ON
 from bot.poller.online_refresh import DEFAULT_TTL_HOURS as DEFAULT_ONLINE_REFRESH_TTL_HOURS
 from bot.poller.online_refresh import REFRESH_INTERVAL_KEY as ONLINE_REFRESH_INTERVAL_KEY
 from bot.poller.online_refresh import TTL_HOURS_KEY as ONLINE_REFRESH_TTL_KEY
+from bot.poller.steam_fetcher import SteamFetcher
 from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 from bot.services.tables import truncate_name
 from bot.util import humanize_ago, parse_utc_offset, utcnow
@@ -69,16 +70,20 @@ router.callback_query.filter(IsAdmin())
 
 
 @router.message(Command("admin"), F.chat.type == ChatType.PRIVATE)
-async def admin_command(message: Message, repo: Repo, fetcher: Fetcher) -> None:
+async def admin_command(
+    message: Message, repo: Repo, fetcher: Fetcher, steam_fetcher: SteamFetcher
+) -> None:
     _awaiting_input.pop(message.from_user.id, None)  # a fresh /admin cancels any pending flow
-    text, markup = await _home(repo, fetcher)
+    text, markup = await _home(repo, fetcher, steam_fetcher)
     await message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data == "a:home")
-async def admin_home(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
+async def admin_home(
+    callback: CallbackQuery, repo: Repo, fetcher: Fetcher, steam_fetcher: SteamFetcher
+) -> None:
     _awaiting_input.pop(callback.from_user.id, None)
-    await _redraw(callback, *await _home(repo, fetcher))
+    await _redraw(callback, *await _home(repo, fetcher, steam_fetcher))
 
 
 @router.callback_query(F.data == "a:newusers")
@@ -201,7 +206,7 @@ async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
     await _redraw(
         callback,
-        "Лимиты строк в списках.\n\n"
+        "⚙️ Глобальные настройки\n\n"
         "Списки /summary и /stats можно сделать безлимитными (0) — они и так "
         "лежат в сворачиваемой цитате, урезать нечего.",
         builder.as_markup(),
@@ -227,7 +232,9 @@ async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
 
 
 @router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(r"^\d+([.,]\d+)?$"))
-async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) -> None:
+async def numeric_setting_input(
+    message: Message, repo: Repo, fetcher: Fetcher, steam_fetcher: SteamFetcher
+) -> None:
     assert message.from_user is not None and message.text is not None
     pending = _awaiting_input.get(message.from_user.id)
     if pending is None:
@@ -263,7 +270,7 @@ async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) 
 
     del _awaiting_input[message.from_user.id]
     await repo.set_app_setting(key, stored, message.from_user.id)
-    reply_text, markup = await _home(repo, fetcher)
+    reply_text, markup = await _home(repo, fetcher, steam_fetcher)
     await message.answer(f"{confirm}\n\n{reply_text}", reply_markup=markup)
 
 
@@ -475,6 +482,32 @@ async def user_refresh(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) ->
     await _redraw(callback, f"{text}\n\n{summary}", markup)
 
 
+@router.callback_query(F.data.startswith("a:syncsteam:"))
+async def user_refresh_steam(
+    callback: CallbackQuery, repo: Repo, steam_fetcher: SteamFetcher
+) -> None:
+    """Steam's counterpart of user_refresh above (2026-09-05 follow-up) —
+    the admin panel never had a way to poll one Steam account on demand."""
+    assert callback.data is not None
+    tg_id = int(callback.data.rsplit(":", 1)[1])
+    link = await repo.get_platform_link(tg_id, "steam")
+    if link is None:
+        await callback.answer("Steam не подключён", show_alert=True)
+        return
+
+    await callback.answer("Обновляю…")
+    try:
+        summary = await steam_fetcher.refresh_user(
+            tg_id, link.external_id, link.display_name or link.external_id
+        )
+    except Exception:
+        log.exception("admin steam refresh of tg_id=%s failed", tg_id)
+        await callback.answer("Не получилось обновить", show_alert=True)
+        return
+    text, markup = await _card(repo, tg_id)
+    await _redraw(callback, f"{text}\n\n{summary}", markup)
+
+
 # --------------------------------------------------------------------- chats
 
 
@@ -674,27 +707,35 @@ async def chat_system_wipe_all_confirm(callback: CallbackQuery, repo: Repo, bot:
 # ------------------------------------------------------------------- screens
 
 
-async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup]:
+async def _home(
+    repo: Repo, fetcher: Fetcher, steam_fetcher: SteamFetcher
+) -> tuple[str, InlineKeyboardMarkup]:
     users = await repo.admin_users()
     chats = await repo.admin_chats()
 
-    active = sum(1 for u in users if u.token_status == "active" and not u.is_excluded)
+    # Split by platform (2026-09-05 follow-up): "вход активен"/"без входа"
+    # only ever meant Xbox's own token — lumping Steam-only people (no
+    # token row at all, token_status is None for them) into "без входа"
+    # made them look like a broken Xbox login instead of "no Xbox at all".
+    xbox_linked = [u for u in users if u.xuid]
+    steam_linked = [u for u in users if u.steam_id]
+    xbox_active = sum(1 for u in xbox_linked if u.token_status == "active" and not u.is_excluded)
+    xbox_broken = sum(1 for u in xbox_linked if u.token_status != "active")
     excluded = sum(1 for u in users if u.is_excluded)
-    broken = sum(1 for u in users if u.token_status != "active")
 
     text = (
         "⚙️ Администрирование\n\n"
-        f"Пользователей:  {len(users)} "
-        f"({active} активных, {excluded} исключено, {broken} без входа)\n"
+        f"Пользователей: {len(users)} (исключено: {excluded})\n"
+        f"  XBOX:  {len(xbox_linked)} (вход активен: {xbox_active}, без входа: {xbox_broken})\n"
+        f"  Steam: {len(steam_linked)}\n"
         f"Чатов:          {sum(1 for c in chats if c.is_active)}\n"
-        f"API (достижения): {_format_api_usage(fetcher.api_usage())}\n\n"
-        "Порог редкости и время итога дня — теперь в карточке каждого "
-        "чата (раздел «Чаты»), не здесь: у каждого чата своё значение."
+        f"API XBOX (достижения):  {_format_api_usage(fetcher.api_usage())}\n"
+        f"API Steam (достижения): {_format_api_usage(steam_fetcher.api_usage())}"
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="👤 Новые пользователи ▸", callback_data="a:newusers")],
-            [InlineKeyboardButton(text="Лимиты таблиц ▸", callback_data="a:limits")],
+            [InlineKeyboardButton(text="⚙️ Глобальные настройки ▸", callback_data="a:limits")],
             [InlineKeyboardButton(text="Пользователи ▸", callback_data="a:users:0")],
             [InlineKeyboardButton(text="Чаты ▸", callback_data="a:chats")],
         ]
@@ -738,8 +779,11 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
     if not users:
         return "👥 Пока никто не подключился.", _back_home()
 
-    today = await repo.achievement_counts_by_xuid(today_cutoff_utc())
-    month = await repo.achievement_counts_by_xuid(month_cutoff_utc())
+    # By tg_id, not xuid (2026-09-05 follow-up) — the old xuid-keyed lookup
+    # showed 0 for a Steam-only person's achievements, and only the Xbox
+    # half of the count for someone with both platforms.
+    today = await repo.achievement_counts_by_tg_id(today_cutoff_utc())
+    month = await repo.achievement_counts_by_tg_id(month_cutoff_utc())
 
     pages = max(1, -(-len(users) // PAGE_SIZE))
     page = max(0, min(page, pages - 1))
@@ -748,11 +792,11 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
     lines = [f"👥 Пользователи  ({page + 1}/{pages})", ""]
     builder = InlineKeyboardBuilder()
     for user in chunk:
-        name = user.gamertag or f"id{user.tg_id}"
+        name = user.gamertag or user.steam_name or f"id{user.tg_id}"
         lines.append(
             f"{_icon(user)} {truncate_name(name, 14):<14} "
             f"{humanize_ago(user.last_online_at):<16} "
-            f"{today.get(user.xuid, (0, 0))[0]} / {month.get(user.xuid, (0, 0))[0]}"
+            f"{today.get(user.tg_id, (0, 0))[0]} / {month.get(user.tg_id, (0, 0))[0]}"
             f"{_note(user)}"
         )
         builder.row(
@@ -774,46 +818,80 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
 
 async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
     user = await repo.get_user(tg_id)
-    if user is None or not user.xuid:
+    steam_link = await repo.get_platform_link(tg_id, "steam")
+    # Used to bail out on `not user.xuid` alone (2026-09-05 follow-up) — a
+    # Steam-only person got "Пользователь не найден" in the admin panel,
+    # same class of gap /stats had before it learned to work without Xbox.
+    if user is None or (not user.xuid and steam_link is None):
         return "Пользователь не найден.", _back_home()
 
     counters = await counters_for(repo, tg_id)
-    token = await repo.get_token(tg_id)
-    presence = await repo.presence_of(user.xuid)
     chats = await repo.chats_of_user(tg_id)
+    display_name = user.gamertag or (steam_link.display_name if steam_link else None)
 
-    login = "— не подключён"
-    if token is not None:
-        login = {
-            "active": f"✅ активен, обновлён {humanize_ago(token.last_refresh_at)}",
-            "invalid": "⚠️ протух",
-            "revoked": "🔕 отключён самим пользователем",
-        }.get(token.status, token.status)
+    lines = [f"👤 {display_name or 'без имени'}", ""]
 
-    online = "нет данных"
-    if presence is not None:
-        # Presence gives no name for PC titles, so fall back to the cache the
-        # poller fills — an id in the card tells the admin nothing.
-        game = presence.title_name or ""
-        if not game and presence.title_id:
-            game = await repo.title_name(presence.title_id) or presence.title_id
-        game = game or "без игры"
-        online = (
-            f"{humanize_ago(presence.updated_at)}, {game}"
-            if presence.state == "Online"
-            else humanize_ago(presence.updated_at)
-        )
+    if user.xuid:
+        token = await repo.get_token(tg_id)
+        presence = await repo.presence_of(user.xuid)
+        login = "— не подключён"
+        if token is not None:
+            login = {
+                "active": f"✅ активен, обновлён {humanize_ago(token.last_refresh_at)}",
+                "invalid": "⚠️ протух",
+                "revoked": "🔕 отключён самим пользователем",
+            }.get(token.status, token.status)
 
-    text = (
-        f"👤 {user.gamertag or 'без геймертега'}  ·  gamerscore {user.gamerscore or 0}\n"
-        f"XUID {user.xuid}\n\n"
-        f"Вход:      {login}\n"
-        f"В сети:    {online}\n"
-        f"Подписан:  {', '.join(f'«{c}»' for c in chats) if chats else 'нигде'}\n"
+        online = "нет данных"
+        if presence is not None:
+            # Presence gives no name for PC titles, so fall back to the
+            # cache the poller fills — an id in the card tells the admin
+            # nothing.
+            game = presence.title_name or ""
+            if not game and presence.title_id:
+                game = await repo.title_name(presence.title_id) or presence.title_id
+            game = game or "без игры"
+            online = (
+                f"{humanize_ago(presence.updated_at)}, {game}"
+                if presence.state == "Online"
+                else humanize_ago(presence.updated_at)
+            )
+        lines += [
+            f"🟢 XBOX  ·  XUID {user.xuid}  ·  gamerscore {user.gamerscore or 0}",
+            f"  Вход активен (XBOX): {login}",
+            f"  В сети (XBOX):       {online}",
+        ]
+
+    if steam_link is not None:
+        steam_presence = await repo.steam_presence_of(steam_link.external_id)
+        steam_online = "нет данных"
+        if steam_presence is not None:
+            game = steam_presence.game_name or ("без игры" if steam_presence.gameid else "")
+            is_online = (steam_presence.persona_state or 0) != 0
+            steam_online = (
+                f"{humanize_ago(steam_presence.updated_at)}, {game}"
+                if is_online and game
+                else (
+                    "в сети, не играет"
+                    if is_online
+                    else humanize_ago(steam_presence.updated_at)
+                )
+            )
+        lines += [
+            f"⚫ Steam  ·  id {steam_link.external_id}",
+            f"  {steam_link.display_name}",
+            f"  В сети (Steam):      {steam_online}",
+        ]
+
+    lines += [
+        "",
+        f"Подписан: {', '.join(f'«{c}»' for c in chats) if chats else 'нигде'}",
         # No lifetime total here: seen_achievements is permanently
         # best-effort (SPEC 5.4), unlike these two date-bounded counters.
-        f"Ачивок:    сегодня {counters.today} · за месяц {counters.month}"
-    )
+        # Sums both platforms (counters_for, SPEC 9 M-Steam-2e).
+        f"Ачивок:   сегодня {counters.today} · за месяц {counters.month}",
+    ]
+    text = "\n".join(lines)
     if user.is_excluded:
         text += "\n\n🚫 Исключён из системы: не опрашивается и не публикуется."
 
@@ -824,7 +902,14 @@ async def _card(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
             callback_data=f"a:excl:{tg_id}:{0 if user.is_excluded else 1}",
         )
     )
-    builder.row(InlineKeyboardButton(text="🔄 Обновить данные", callback_data=f"a:sync:{tg_id}"))
+    if user.xuid:
+        builder.row(
+            InlineKeyboardButton(text="🔄 Обновить XBOX", callback_data=f"a:sync:{tg_id}")
+        )
+    if steam_link is not None:
+        builder.row(
+            InlineKeyboardButton(text="🔄 Обновить Steam", callback_data=f"a:syncsteam:{tg_id}")
+        )
     builder.row(InlineKeyboardButton(text="‹ К списку", callback_data="a:users:0"))
     return text, builder.as_markup()
 
@@ -940,9 +1025,17 @@ def _format_api_usage(windows: list[tuple[int, int, float]]) -> str:
 
 
 def _icon(user: AdminUserRow) -> str:
+    """Platform dots (2026-09-05 follow-up) plus Xbox's own login-status
+    icon — Steam has no token to expire, so there's nothing analogous to
+    add for it beyond the dot itself."""
     if user.is_excluded:
         return "🚫"
-    return STATUS_ICON.get(user.token_status or "", "—")
+    parts = []
+    if user.xuid:
+        parts.append("🟢" + STATUS_ICON.get(user.token_status or "", "—"))
+    if user.steam_id:
+        parts.append("⚫")
+    return "".join(parts)
 
 
 def _note(user: AdminUserRow) -> str:

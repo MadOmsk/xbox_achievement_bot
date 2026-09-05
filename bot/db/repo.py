@@ -168,15 +168,24 @@ class UserChatRow:
 
 @dataclass(slots=True)
 class AdminUserRow:
+    """A row of /admin's own user list — was Xbox-only (`WHERE u.xuid IS
+    NOT NULL`, admin_users() below), so a Steam-only person never showed up
+    in the admin panel at all (2026-09-05 follow-up, SPEC 9 M-Steam-2e:
+    the same class of gap /stats had before it summed both platforms).
+    `xuid` and the Steam fields are each optional now — never both None,
+    admin_users() only returns someone connected on at least one."""
+
     tg_id: int
     gamertag: str | None
     username: str | None
-    xuid: str
+    xuid: str | None
     gamerscore: int | None
     is_excluded: bool
     last_online_at: str | None
     token_status: str | None
     last_refresh_at: str | None
+    steam_id: str | None = None
+    steam_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -185,6 +194,20 @@ class PresenceRow:
     state: str | None
     title_id: str | None
     title_name: str | None
+    updated_at: str | None
+
+
+@dataclass(slots=True)
+class SteamPresenceRow:
+    """Steam's counterpart of PresenceRow — raw persona_state/gameid, not
+    normalized to Xbox's state vocabulary (that stitching is chat_member_
+    presence()'s own job, SPEC 9 M-Steam-2e); the admin card (2026-09-05
+    follow-up) reads these two fields directly instead."""
+
+    steam_id: str
+    persona_state: int | None
+    gameid: str | None
+    game_name: str | None
     updated_at: str | None
 
 
@@ -639,6 +662,26 @@ class Repo:
             state=row["state"],
             title_id=row["title_id"],
             title_name=row["title_name"],
+            updated_at=row["updated_at"],
+        )
+
+    async def steam_presence_of(self, steam_id: str) -> SteamPresenceRow | None:
+        """Steam's counterpart of `presence_of` — the admin card's own
+        lookup for one person (2026-09-05 follow-up), not the batched
+        `steam_pollable_users()` the poller itself uses."""
+        cursor = await self._conn.execute(
+            "SELECT steam_id, persona_state, gameid, game_name, updated_at "
+            "FROM steam_presence_state WHERE steam_id = ?",
+            (steam_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return SteamPresenceRow(
+            steam_id=row["steam_id"],
+            persona_state=row["persona_state"],
+            gameid=row["gameid"],
+            game_name=row["game_name"],
             updated_at=row["updated_at"],
         )
 
@@ -1223,6 +1266,22 @@ class Repo:
         cursor = await self._conn.execute(query + " GROUP BY xuid", params)
         return {row[0]: (int(row[1]), int(row[2])) for row in await cursor.fetchall()}
 
+    async def achievement_counts_by_tg_id(
+        self, since: datetime | None
+    ) -> dict[int, tuple[int, int]]:
+        """Same as `achievement_counts_by_xuid`, but summed across every
+        platform a person has connected (SPEC 9, M-Steam-2e) — the admin
+        users list's own combined counters (2026-09-05 follow-up): the list
+        used to show `achievement_counts_by_xuid`'s Xbox-only numbers even
+        for someone with Steam achievements too."""
+        query = "SELECT tg_id, COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements"
+        params: list[object] = []
+        if since is not None:
+            query += " WHERE unlocked_at >= ?"
+            params.append(_iso(since))
+        cursor = await self._conn.execute(query + " GROUP BY tg_id", params)
+        return {row[0]: (int(row[1]), int(row[2])) for row in await cursor.fetchall()}
+
     # ------------------------------------------------------------ chat stats
 
     async def chat_member_stats(
@@ -1665,11 +1724,17 @@ class Repo:
     # ----------------------------------------------------------------- admin
 
     async def admin_users(self) -> list[AdminUserRow]:
+        """Every connected person, Xbox or Steam or both (2026-09-05
+        follow-up) — used to be `WHERE u.xuid IS NOT NULL`, which hid every
+        Steam-only person from the admin panel entirely."""
         cursor = await self._conn.execute(
             "SELECT u.tg_id, u.gamertag, u.username, u.xuid, u.gamerscore, u.is_excluded,"
-            "       u.last_online_at, t.status, t.last_refresh_at "
-            "FROM users u LEFT JOIN tokens t ON t.tg_id = u.tg_id "
-            "WHERE u.xuid IS NOT NULL "
+            "       u.last_online_at, t.status, t.last_refresh_at,"
+            "       pl.external_id AS steam_id, pl.display_name AS steam_name "
+            "FROM users u "
+            "LEFT JOIN tokens t ON t.tg_id = u.tg_id "
+            "LEFT JOIN platform_links pl ON pl.tg_id = u.tg_id AND pl.platform = 'steam' "
+            "WHERE u.xuid IS NOT NULL OR pl.external_id IS NOT NULL "
             "ORDER BY u.is_excluded, u.last_online_at DESC"
         )
         return [
@@ -1683,6 +1748,8 @@ class Repo:
                 last_online_at=row["last_online_at"],
                 token_status=row["status"],
                 last_refresh_at=row["last_refresh_at"],
+                steam_id=row["steam_id"],
+                steam_name=row["steam_name"],
             )
             for row in await cursor.fetchall()
         ]

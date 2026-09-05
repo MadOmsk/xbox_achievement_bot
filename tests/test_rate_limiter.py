@@ -1,8 +1,9 @@
-"""RateLimiter's usage() snapshot, surfaced in the admin panel (SPEC 6.4)."""
+"""RateLimiter's usage() snapshot, surfaced in the admin panel (SPEC 6.4) —
+shared by Xbox and Steam's own clients alike (2026-09-05 refactor)."""
 
 from __future__ import annotations
 
-from bot.services.xbox.client import RateLimiter
+from bot.services.rate_limiter import RateLimiter
 
 
 async def test_usage_reflects_acquired_calls() -> None:

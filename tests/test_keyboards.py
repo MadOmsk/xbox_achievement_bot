@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from bot.handlers.keyboards import next_rarity_mode, panel_keyboard
+from bot.handlers.keyboards import (
+    next_rarity_mode,
+    panel_keyboard,
+    steam_profile_url,
+    xbox_profile_url,
+)
 
 
 def _button_texts(markup) -> list[str]:
@@ -62,3 +67,49 @@ def test_needs_reconnect_adds_a_button_without_hiding_settings() -> None:
 def test_connected_keyboard_offers_disconnect() -> None:
     markup = panel_keyboard(180, connected=True)
     assert "panel:disconnect" in _callback_data(markup)
+
+
+def _disconnect_row(markup, callback_data: str) -> list:
+    return next(
+        row for row in markup.inline_keyboard if callback_data in [b.callback_data for b in row]
+    )
+
+
+def test_xbox_disconnect_row_gains_a_profile_link_when_gamertag_is_known() -> None:
+    """2026-09-05 follow-up: profile link and disconnect share one row."""
+    without = panel_keyboard(180, connected=True)
+    row = _disconnect_row(without, "panel:disconnect")
+    assert len(row) == 1  # no gamertag given — no profile button to add
+
+    with_tag = panel_keyboard(180, connected=True, gamertag="Mad Omsk")
+    row = _disconnect_row(with_tag, "panel:disconnect")
+    assert len(row) == 2
+    assert row[0].url == xbox_profile_url("Mad Omsk")
+    assert row[1].callback_data == "panel:disconnect"
+
+
+def test_steam_disconnect_row_gains_a_profile_link_when_steam_id_is_known() -> None:
+    without = panel_keyboard(180, connected=True, steam_connected=True)
+    row = _disconnect_row(without, "steam:disconnectprompt")
+    assert len(row) == 1
+
+    with_id = panel_keyboard(
+        180, connected=True, steam_connected=True, steam_id="76561197960287930"
+    )
+    row = _disconnect_row(with_id, "steam:disconnectprompt")
+    assert len(row) == 2
+    assert row[0].url == steam_profile_url("76561197960287930")
+    assert row[1].callback_data == "steam:disconnectprompt"
+
+
+def test_xbox_profile_url_encodes_the_gamertag() -> None:
+    assert xbox_profile_url("Mad Omsk") == (
+        "https://account.xbox.com/en-us/profile?gamertag=Mad%20Omsk"
+    )
+
+
+def test_steam_profile_url_uses_the_steamid64() -> None:
+    assert (
+        steam_profile_url("76561197960287930")
+        == "https://steamcommunity.com/profiles/76561197960287930"
+    )

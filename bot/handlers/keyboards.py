@@ -9,9 +9,24 @@ cycle — this file already sits underneath all of them.
 from __future__ import annotations
 
 import contextlib
+from urllib.parse import quote
 
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+def xbox_profile_url(gamertag: str) -> str:
+    """The classic public gamer-profile page — works with no login, unlike
+    the newer xbox.com/play/user/ page which redirects through a sign-in
+    wall for a visitor who isn't signed in themselves (2026-09-05
+    follow-up, panel's own "👤 Профиль" button)."""
+    return f"https://account.xbox.com/en-us/profile?gamertag={quote(gamertag)}"
+
+
+def steam_profile_url(steam_id: str) -> str:
+    """The SteamID64 form always works, unlike a vanity URL — not every
+    account has customized one (2026-09-05 follow-up)."""
+    return f"https://steamcommunity.com/profiles/{steam_id}"
 
 
 async def safe_edit(
@@ -26,6 +41,7 @@ async def safe_edit(
     if isinstance(callback.message, Message):
         with contextlib.suppress(Exception):
             await callback.message.edit_text(text, reply_markup=markup, **kwargs)
+
 
 # Offsets, not zone names: MSK and CST are ambiguous, +03:00 is not (SPEC 6.1.1).
 COMMON_OFFSETS_HOURS: tuple[int, ...] = (2, 3, 4, 5, 6, 7, 9, 10)
@@ -142,6 +158,8 @@ def panel_keyboard(
     connected: bool = True,
     needs_reconnect: bool = False,
     steam_connected: bool = False,
+    gamertag: str | None = None,
+    steam_id: str | None = None,
 ) -> InlineKeyboardMarkup:
     if not connected:
         # Xbox and Steam are independent (M-Steam-1) — someone with neither
@@ -169,13 +187,30 @@ def panel_keyboard(
         ],
         [InlineKeyboardButton(text="💬 Мои чаты ▸", callback_data="panel:chatlist")],
         [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
-        [InlineKeyboardButton(text="🔕 Отключить XBOX", callback_data="panel:disconnect")],
     ]
-    # Symmetric with XBOX's own disconnect row above (2026-09-05 follow-up)
-    # — the connect button already moved up top when not connected, so the
-    # disconnect one sits down here to match.
+    # Profile link next to disconnect, one row each (2026-09-05 follow-up)
+    # — gamertag/steam_id can in principle be missing (pre-first-sync edge
+    # case), so the link only appears once there's something to link to.
+    xbox_disconnect = InlineKeyboardButton(
+        text="🔕 Отключить XBOX", callback_data="panel:disconnect"
+    )
+    rows.append(
+        [InlineKeyboardButton(text="👤 Профиль", url=xbox_profile_url(gamertag)), xbox_disconnect]
+        if gamertag
+        else [xbox_disconnect]
+    )
+    # Symmetric with XBOX's own disconnect row above — the connect button
+    # already moved up top when not connected, so the disconnect one sits
+    # down here to match.
     if steam_connected:
-        rows.append([STEAM_DISCONNECT_BUTTON])
+        rows.append(
+            [
+                InlineKeyboardButton(text="👤 Профиль", url=steam_profile_url(steam_id)),
+                STEAM_DISCONNECT_BUTTON,
+            ]
+            if steam_id
+            else [STEAM_DISCONNECT_BUTTON]
+        )
     rows.append([InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

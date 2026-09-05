@@ -405,6 +405,8 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         connected=connected,
         needs_reconnect=needs_reconnect,
         steam_connected=steam_link is not None,
+        gamertag=user.gamertag if user else None,
+        steam_id=steam_link.external_id if steam_link else None,
     )
 
     if user is None or not user.xuid:

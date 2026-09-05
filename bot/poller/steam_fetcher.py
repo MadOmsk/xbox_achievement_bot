@@ -15,7 +15,13 @@ from bot.db.repo import AchievementRow, Repo
 from bot.poller.publisher import Publisher
 from bot.poller.rows import to_achievement_row
 from bot.services.steam.achievements import fetch_unlocked
-from bot.services.steam.client import OwnedGame, SteamApiError, get_owned_games
+from bot.services.steam.client import (
+    OwnedGame,
+    SteamApiError,
+    get_owned_games,
+    get_presence_batch,
+    rate_limit_usage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +42,11 @@ class SteamFetcher:
         self._publisher = publisher
         self._backfill_slots = asyncio.Semaphore(concurrency)  # people backfilling at once
         self._game_slots = asyncio.Semaphore(GAME_BACKFILL_CONCURRENCY)  # games within one
+
+    def api_usage(self) -> list[tuple[int, int, float]]:
+        """(used, limit, window_seconds) — the admin panel's Steam line,
+        alongside Fetcher's own Xbox one (SPEC 6.4)."""
+        return rate_limit_usage()
 
     async def poll_title(
         self,
@@ -58,6 +69,35 @@ class SteamFetcher:
         log.info("tg_id=%s unlocked %s new steam achievements in %s", tg_id, len(new_rows), appid)
         await self._publisher.publish(tg_id, steam_id, persona_name, new_rows, game_name)
         return len(new_rows)
+
+    async def refresh_user(self, tg_id: int, steam_id: str, persona_name: str) -> str:
+        """An out-of-turn look at one person, for the admin card (SPEC 6.4)
+        — Steam's counterpart of Fetcher.refresh_user() (2026-09-05
+        follow-up: the admin panel never had a Steam equivalent at all)."""
+        try:
+            snapshots = await get_presence_batch(self._api_key, [steam_id])
+        except SteamApiError as exc:
+            return f"Не удалось обновить: {exc}"
+        snapshot = snapshots.get(steam_id)
+        if snapshot is None:
+            return "Steam не вернул профиль (скрыт или удалён)."
+
+        await self._repo.save_steam_presence_state(
+            steam_id, snapshot.persona_state, snapshot.gameid, snapshot.game_name, changed=False
+        )
+        published = 0
+        if snapshot.persona_state != 0 and snapshot.gameid is not None:
+            published = await self.poll_title(
+                tg_id,
+                steam_id,
+                snapshot.persona_name or persona_name,
+                snapshot.gameid,
+                snapshot.game_name,
+            )
+
+        where = snapshot.game_name or snapshot.gameid or "без игры"
+        state = f"в сети, {where}" if snapshot.persona_state != 0 else "не в сети"
+        return f"Обновлено: {state}; новых достижений {published}."
 
     async def backfill(self, tg_id: int, steam_id: str) -> int:
         """Mark everything already unlocked as seen, publishing nothing —

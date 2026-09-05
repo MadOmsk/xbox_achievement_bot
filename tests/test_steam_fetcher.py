@@ -9,7 +9,7 @@ from bot.db.repo import AchievementRow, Repo
 from bot.poller import steam_fetcher as steam_fetcher_module
 from bot.poller.steam_fetcher import SteamFetcher
 from bot.services.models import ParsedAchievement
-from bot.services.steam.client import OwnedGame, SteamApiError
+from bot.services.steam.client import OwnedGame, SteamApiError, SteamPresence
 
 TG_ID = 42
 STEAM_ID = "76561197960287930"
@@ -64,6 +64,71 @@ async def test_poll_title_publishes_only_new_achievements(
     by_appid["550"].append(parsed("a3"))
     assert await fetcher.poll_title(TG_ID, STEAM_ID, "Mad Omsk", "550", "L4D2") == 1
     assert [a.achievement_id for a in publisher.published[1]] == ["a3"]
+
+
+async def test_refresh_user_polls_the_current_game(repo: Repo, monkeypatch) -> None:
+    """The admin panel's own "🔄 Обновить Steam" (2026-09-05 follow-up) —
+    never existed before, unlike Xbox's Fetcher.refresh_user()."""
+    await _linked_user(repo)
+
+    async def fake_batch(api_key, steam_ids):
+        assert steam_ids == [STEAM_ID]
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID,
+                persona_name="Mad Omsk",
+                persona_state=1,
+                gameid="550",
+                game_name="Left 4 Dead 2",
+            )
+        }
+
+    async def fake_fetch_unlocked(repo_, api_key, steam_id, appid):
+        return [parsed("a1", appid)]
+
+    monkeypatch.setattr(steam_fetcher_module, "get_presence_batch", fake_batch)
+    monkeypatch.setattr(steam_fetcher_module, "fetch_unlocked", fake_fetch_unlocked)
+    fetcher = SteamFetcher(repo, "key", FakePublisher())  # type: ignore[arg-type]
+
+    summary = await fetcher.refresh_user(TG_ID, STEAM_ID, "Mad Omsk")
+
+    assert "Left 4 Dead 2" in summary
+    assert "1" in summary
+    presence = await repo.steam_presence_of(STEAM_ID)
+    assert presence is not None and presence.gameid == "550"
+
+
+async def test_refresh_user_reports_offline_with_no_game(repo: Repo, monkeypatch) -> None:
+    await _linked_user(repo)
+
+    async def fake_batch(api_key, steam_ids):
+        return {
+            STEAM_ID: SteamPresence(
+                steam_id=STEAM_ID, persona_name="Mad Omsk", persona_state=0, gameid=None,
+                game_name=None,
+            )
+        }
+
+    monkeypatch.setattr(steam_fetcher_module, "get_presence_batch", fake_batch)
+    fetcher = SteamFetcher(repo, "key", FakePublisher())  # type: ignore[arg-type]
+
+    summary = await fetcher.refresh_user(TG_ID, STEAM_ID, "Mad Omsk")
+
+    assert "не в сети" in summary
+
+
+async def test_refresh_user_handles_a_missing_profile(repo: Repo, monkeypatch) -> None:
+    await _linked_user(repo)
+
+    async def fake_batch(api_key, steam_ids):
+        return {}  # Steam simply omits a deleted/hidden profile
+
+    monkeypatch.setattr(steam_fetcher_module, "get_presence_batch", fake_batch)
+    fetcher = SteamFetcher(repo, "key", FakePublisher())  # type: ignore[arg-type]
+
+    summary = await fetcher.refresh_user(TG_ID, STEAM_ID, "Mad Omsk")
+
+    assert "не" in summary.lower()
 
 
 async def test_backfill_publishes_nothing(repo: Repo, monkeypatch) -> None:

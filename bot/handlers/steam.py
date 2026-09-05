@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -219,6 +220,29 @@ async def steam_link_accept(
     await _connect(bot, repo, settings, steam_fetcher, callback.from_user.id, username, raw)
 
 
+def _unresolved_profile_hint(raw: str) -> str:
+    """2026-09-05 follow-up: a bare word that isn't a link gets a longer
+    hint. Steam has no official way to search by the display name shown in
+    the client/friends list, only by the *custom URL* slug
+    (steamcommunity.com/id/<this>) — those two often match, but not
+    always, and when they don't there is genuinely no way to resolve one
+    from the other (verified: no ISteamUser search-by-name endpoint
+    exists). A link or raw profile ID always works, so that's the only
+    fallback offered — not a nickname search."""
+    hint = (
+        "Не нашёл такой профиль Steam. Пришли ссылку на профиль — "
+        "например, https://steamcommunity.com/id/gaben."
+    )
+    if not re.search(_STEAM_LINK_PATTERN, raw):
+        hint += (
+            "\n\nЕсли присылал ник — я ищу именно по ссылке профиля, "
+            "не по имени в клиенте: у Steam просто нет способа искать "
+            "по нему. Ссылку можно скопировать в приложении или на "
+            "steamcommunity.com → «Изменить профиль»."
+        )
+    return hint
+
+
 async def _connect(
     bot: Bot,
     repo: Repo,
@@ -250,11 +274,7 @@ async def _connect(
         # `raw` is whatever the person typed, not a secret — same as a
         # gamertag, safe to log as-is.
         log.info("connect_steam: could not resolve tg_id=%s raw=%r: %s", tg_id, raw, exc)
-        await bot.send_message(
-            tg_id,
-            "Не нашёл такой профиль Steam. Проверь ссылку — например, "
-            "https://steamcommunity.com/id/gaben.",
-        )
+        await bot.send_message(tg_id, _unresolved_profile_hint(raw))
         return
 
     if not profile.is_public:
