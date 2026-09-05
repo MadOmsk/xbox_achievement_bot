@@ -33,7 +33,7 @@
 │   │   │                          /online, /who, /recent, /summary, /delete_last, хаб группы
 │   │   ├── hltb.py              — /hltb, поиск времени прохождения (SPEC 6.6)
 │   │   ├── steam.py             — /connect_steam, /disconnect_steam (M-Steam-1)
-│   │   └── keyboards.py         — инлайн-клавиатуры, общие для панелей и онбординга
+│   │   └── keyboards.py         — инлайн-клавиатуры + мелкие общие хелперы (format_*, safe_edit)
 │   │
 │   ├── services/                — бизнес-логика, не знает про Telegram/aiogram
 │   │   ├── achievements.py       — фильтрация ачивок, формирование сообщений, platform_tag

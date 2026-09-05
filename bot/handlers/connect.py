@@ -19,6 +19,7 @@ from bot.handlers.keyboards import (
     TZ_SKIP,
     connect_keyboard,
     format_offset,
+    safe_edit,
     timezone_keyboard,
 )
 from bot.handlers.panel import render_panel
@@ -146,12 +147,14 @@ async def disconnect_confirm(callback: CallbackQuery, repo: Repo, notifier: Admi
     await repo.unlink_xbox_account(tg_id)
     await notifier.user_disconnected(tg_id, gamertag, "сам через /disconnect_xbox")
 
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            "Отключил. Вернуться можно в любой момент — /connect_xbox.\n\n"
-            f"Разрешение в аккаунте Microsoft убирается тут: {REVOKE_URL}",
-            disable_web_page_preview=True,
-        )
+    # Found while refactoring (2026-09-05): none of the edits in this file
+    # tolerated a failed edit, unlike panel.py/steam.py's own — now they do.
+    await safe_edit(
+        callback,
+        "Отключил. Вернуться можно в любой момент — /connect_xbox.\n\n"
+        f"Разрешение в аккаунте Microsoft убирается тут: {REVOKE_URL}",
+        disable_web_page_preview=True,
+    )
     await callback.answer()
 
 
@@ -177,25 +180,23 @@ async def optout(callback: CallbackQuery, repo: Repo, notifier: AdminNotifier) -
     await notifier.user_disconnected(
         tg_id, (user.gamertag if user else None) or f"id{tg_id}", "отписался кнопкой"
     )
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            "Хорошо, больше не напоминаю. Историю достижений сохранил — "
-            "вернуться можно в любой момент через /connect_xbox."
-        )
+    await safe_edit(
+        callback,
+        "Хорошо, больше не напоминаю. Историю достижений сохранил — "
+        "вернуться можно в любой момент через /connect_xbox.",
+    )
     await callback.answer()
 
 
 @router.callback_query(F.data == TZ_MORE)
 async def timezone_full_list(callback: CallbackQuery) -> None:
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(TIMEZONE_PROMPT, reply_markup=timezone_keyboard(full=True))
+    await safe_edit(callback, TIMEZONE_PROMPT, timezone_keyboard(full=True))
     await callback.answer()
 
 
 @router.callback_query(F.data == TZ_SKIP)
 async def timezone_skip(callback: CallbackQuery) -> None:
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text("Хорошо, пропустил. Поменять — в /panel.")
+    await safe_edit(callback, "Хорошо, пропустил. Поменять — в /panel.")
     await callback.answer()
 
 
@@ -207,10 +208,7 @@ async def timezone_set(callback: CallbackQuery, repo: Repo) -> None:
     await repo.update_user_settings(callback.from_user.id, tz_offset_min=minutes)
     _awaiting_manual_tz.pop(callback.from_user.id, None)
 
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            f"Часовой пояс: {format_offset(minutes)}. Поменять можно в /panel."
-        )
+    await safe_edit(callback, f"Часовой пояс: {format_offset(minutes)}. Поменять можно в /panel.")
     await callback.answer()
 
 
@@ -226,7 +224,7 @@ MANUAL_TZ_HINT = "Пришли смещение одним сообщением,
 async def timezone_manual_prompt(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
         _awaiting_manual_tz[callback.from_user.id] = callback.message.message_id
-        await callback.message.edit_text(MANUAL_TZ_HINT)
+    await safe_edit(callback, MANUAL_TZ_HINT)
     await callback.answer()
 
 

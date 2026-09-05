@@ -37,7 +37,7 @@ from aiogram.types import (
 
 from bot.config import Settings
 from bot.db.repo import Repo
-from bot.handlers.keyboards import deep_link_keyboard
+from bot.handlers.keyboards import deep_link_keyboard, safe_edit
 from bot.poller.steam_fetcher import SteamFetcher
 from bot.services.steam.client import SteamApiError, get_profile, resolve_steam_id
 
@@ -200,9 +200,7 @@ async def steam_link_spotted(message: Message) -> None:
 @router.callback_query(F.data == "steam:linkno")
 async def steam_link_decline(callback: CallbackQuery) -> None:
     _pending_confirmation.pop(callback.from_user.id, None)
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text("Хорошо, не подключаю.")
+    await safe_edit(callback, "Хорошо, не подключаю.")
     await callback.answer()
 
 
@@ -338,12 +336,11 @@ async def steam_disconnect_button(callback: CallbackQuery, repo: Repo) -> None:
     if link is None:
         await callback.answer("Steam и так не подключён.", show_alert=True)
         return
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                f"Отключить Steam ({link.display_name})?",
-                reply_markup=_disconnect_prompt_keyboard(from_panel=True),
-            )
+    await safe_edit(
+        callback,
+        f"Отключить Steam ({link.display_name})?",
+        _disconnect_prompt_keyboard(from_panel=True),
+    )
     await callback.answer()
 
 
@@ -364,6 +361,7 @@ async def disconnect_steam_confirm(callback: CallbackQuery, repo: Repo) -> None:
         # — a stale presence row would otherwise keep answering /online for
         # an account that's no longer linked to anyone.
         await repo.delete_steam_presence_state(link.external_id)
-    if isinstance(callback.message, Message):
-        await callback.message.edit_text("Отключил Steam. Вернуться можно в любой момент.")
+    # Found while refactoring (2026-09-05): the one edit in this file that
+    # didn't tolerate a failed edit, unlike every other one here.
+    await safe_edit(callback, "Отключил Steam. Вернуться можно в любой момент.")
     await callback.answer()

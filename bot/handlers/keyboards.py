@@ -1,9 +1,31 @@
-"""Inline keyboards shared by the connect flow and the panel."""
+"""Inline keyboards shared by the connect flow and the panel — and, same as
+format_offset/format_rarity below, small handler-side helpers with no other
+natural home. safe_edit (2026-09-05 refactor) is one of those: imported by
+panel.py, connect.py, steam.py and hltb.py alike, none of which import each
+other back through this module, so it can live wherever without risking a
+cycle — this file already sits underneath all of them.
+"""
 
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+import contextlib
+
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+async def safe_edit(
+    callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None, **kwargs: object
+) -> None:
+    """Edit the callback's own message in place, tolerating the two routine
+    failures every caller already needs to: the message isn't a real,
+    editable Message (gone, or not accessible), or Telegram refuses an
+    edit that changes nothing. Never calls callback.answer() itself —
+    callers keep picking their own toast text, or none at all, same as
+    before this existed."""
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(text, reply_markup=markup, **kwargs)
 
 # Offsets, not zone names: MSK and CST are ambiguous, +03:00 is not (SPEC 6.1.1).
 COMMON_OFFSETS_HOURS: tuple[int, ...] = (2, 3, 4, 5, 6, 7, 9, 10)
