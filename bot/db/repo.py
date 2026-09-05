@@ -1129,6 +1129,27 @@ class Repo:
 
     # ------------------------------------------------------------ aggregates
 
+    async def _achievement_counts_by(
+        self, column: str, value: object, since: datetime | None
+    ) -> tuple[int, int]:
+        """Shared shape behind `achievement_counts` (by xuid) and
+        `achievement_counts_for_person` (by tg_id) below (2026-09-05
+        refactor) — identical query, just which column identifies the rows.
+        `column` is always one of the two literal strings those two pass,
+        never anything derived from a request, so interpolating it here
+        carries no injection risk despite not being a bound parameter."""
+        query = (
+            "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) "
+            f"FROM seen_achievements WHERE {column} = ?"
+        )
+        params: list[object] = [value]
+        if since is not None:
+            query += " AND unlocked_at >= ?"
+            params.append(_iso(since))
+        cursor = await self._conn.execute(query, params)
+        row = await cursor.fetchone()
+        return (int(row[0]), int(row[1])) if row else (0, 0)
+
     async def achievement_counts(self, xuid: str, since: datetime | None) -> tuple[int, int]:
         """How many achievements and how much gamerscore since a moment.
 
@@ -1136,20 +1157,7 @@ class Repo:
         as UTC ISO strings of one shape, so a string comparison is a time
         comparison here.
         """
-        if since is None:
-            cursor = await self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
-                "WHERE xuid = ?",
-                (xuid,),
-            )
-        else:
-            cursor = await self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
-                "WHERE xuid = ? AND unlocked_at >= ?",
-                (xuid, _iso(since)),
-            )
-        row = await cursor.fetchone()
-        return (int(row[0]), int(row[1])) if row else (0, 0)
+        return await self._achievement_counts_by("xuid", xuid, since)
 
     async def achievement_counts_for_person(
         self, tg_id: int, since: datetime | None
@@ -1164,20 +1172,7 @@ class Repo:
         Steam row's gamerscore is always 0 (services/steam/achievements.py),
         so it never contributes to the sum, by construction, not by a check
         here."""
-        if since is None:
-            cursor = await self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
-                "WHERE tg_id = ?",
-                (tg_id,),
-            )
-        else:
-            cursor = await self._conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements "
-                "WHERE tg_id = ? AND unlocked_at >= ?",
-                (tg_id, _iso(since)),
-            )
-        row = await cursor.fetchone()
-        return (int(row[0]), int(row[1])) if row else (0, 0)
+        return await self._achievement_counts_by("tg_id", tg_id, since)
 
     async def achievement_platform_breakdown(
         self, tg_id: int, since: datetime | None
@@ -1220,17 +1215,12 @@ class Repo:
         self, since: datetime | None
     ) -> dict[str, tuple[int, int]]:
         """The same numbers for everyone at once — one query for a whole page."""
-        if since is None:
-            cursor = await self._conn.execute(
-                "SELECT xuid, COUNT(*), COALESCE(SUM(gamerscore), 0) "
-                "FROM seen_achievements GROUP BY xuid"
-            )
-        else:
-            cursor = await self._conn.execute(
-                "SELECT xuid, COUNT(*), COALESCE(SUM(gamerscore), 0) "
-                "FROM seen_achievements WHERE unlocked_at >= ? GROUP BY xuid",
-                (_iso(since),),
-            )
+        query = "SELECT xuid, COUNT(*), COALESCE(SUM(gamerscore), 0) FROM seen_achievements"
+        params: list[object] = []
+        if since is not None:
+            query += " WHERE unlocked_at >= ?"
+            params.append(_iso(since))
+        cursor = await self._conn.execute(query + " GROUP BY xuid", params)
         return {row[0]: (int(row[1]), int(row[2])) for row in await cursor.fetchall()}
 
     # ------------------------------------------------------------ chat stats

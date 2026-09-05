@@ -571,26 +571,41 @@ async def chat_wipe_prompt(callback: CallbackQuery, repo: Repo) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("a:cwipey:"))
-async def chat_wipe_confirm(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
-    assert callback.data is not None
-    chat_id = int(callback.data.rsplit(":", 1)[1])
-    ids = await repo.bot_messages_since(chat_id, utcnow() - timedelta(hours=WIPE_WINDOW_HOURS))
-
+async def _bulk_delete_messages(bot: Bot, chat_id: int, ids: list[int]) -> bool:
+    """Deletes in chunks of 100 — the Bot API's own cap on deleteMessages —
+    shared by the unconditional wipe and the "system only" pair below
+    (2026-09-05 refactor: this loop was duplicated verbatim between them).
+    Returns whether every chunk went through; a failed chunk is logged, not
+    raised — same "expected failure" tolerance as everywhere else here."""
     ok = True
-    for start in range(0, len(ids), 100):  # Bot API caps deleteMessages at 100 ids per call
+    for start in range(0, len(ids), 100):
         try:
             await bot.delete_messages(chat_id, ids[start : start + 100])
         except Exception:
             log.info("bulk delete failed for chat %s, chunk at %s", chat_id, start)
             ok = False
+    return ok
 
-    # Forgotten either way: Telegram silently skips ids it can no longer
-    # delete (too old, already gone), and retrying those later would not
-    # help either — nothing left worth keeping the log row for.
+
+async def _wipe_confirm(
+    callback: CallbackQuery, repo: Repo, bot: Bot, chat_id: int, ids: list[int]
+) -> None:
+    """Shared tail of every wipe variant below: delete what the caller
+    already decided on, forget the log rows either way (Telegram silently
+    skips ids it can no longer delete — too old, already gone — and
+    retrying those later would not help), report, redraw the chat card."""
+    ok = await _bulk_delete_messages(bot, chat_id, ids)
     await repo.forget_bot_messages(chat_id, ids)
     await callback.answer("Готово." if ok else "Частично — что-то не далось стереть.")
     await _redraw(callback, *await _chat(repo, chat_id))
+
+
+@router.callback_query(F.data.startswith("a:cwipey:"))
+async def chat_wipe_confirm(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    ids = await repo.bot_messages_since(chat_id, utcnow() - timedelta(hours=WIPE_WINDOW_HOURS))
+    await _wipe_confirm(callback, repo, bot, chat_id, ids)
 
 
 # A narrower sibling of the unconditional wipe above (2026-09-05 follow-up,
@@ -622,25 +637,6 @@ async def _system_wipe_prompt(
     )
 
 
-async def _system_wipe_confirm(
-    callback: CallbackQuery, repo: Repo, bot: Bot, ids: list[int]
-) -> None:
-    assert callback.data is not None
-    chat_id = int(callback.data.rsplit(":", 1)[1])
-
-    ok = True
-    for start in range(0, len(ids), 100):  # Bot API caps deleteMessages at 100 ids per call
-        try:
-            await bot.delete_messages(chat_id, ids[start : start + 100])
-        except Exception:
-            log.info("system wipe failed for chat %s, chunk at %s", chat_id, start)
-            ok = False
-
-    await repo.forget_bot_messages(chat_id, ids)
-    await callback.answer("Готово." if ok else "Частично — что-то не далось стереть.")
-    await _redraw(callback, *await _chat(repo, chat_id))
-
-
 @router.callback_query(F.data.startswith("a:cswipe:"))
 async def chat_system_wipe_prompt(callback: CallbackQuery, repo: Repo) -> None:
     assert callback.data is not None
@@ -656,7 +652,7 @@ async def chat_system_wipe_confirm(callback: CallbackQuery, repo: Repo, bot: Bot
     chat_id = int(callback.data.rsplit(":", 1)[1])
     since = utcnow() - timedelta(hours=WIPE_WINDOW_HOURS)
     ids = await repo.system_bot_messages_since(chat_id, since)
-    await _system_wipe_confirm(callback, repo, bot, ids)
+    await _wipe_confirm(callback, repo, bot, chat_id, ids)
 
 
 @router.callback_query(F.data.startswith("a:cswipeall:"))
@@ -672,7 +668,7 @@ async def chat_system_wipe_all_confirm(callback: CallbackQuery, repo: Repo, bot:
     assert callback.data is not None
     chat_id = int(callback.data.rsplit(":", 1)[1])
     ids = await repo.all_system_bot_messages(chat_id)
-    await _system_wipe_confirm(callback, repo, bot, ids)
+    await _wipe_confirm(callback, repo, bot, chat_id, ids)
 
 
 # ------------------------------------------------------------------- screens

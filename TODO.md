@@ -399,6 +399,21 @@
   собственный `_redraw(callback, repo)` внизу файла не вызывался нигде
   вообще (все места редактирования панели уже дублировали его тело
   вручную) — ruff такое не ловит, только неиспользуемые импорты.
+- **`db/repo.py`: `achievement_counts`/`achievement_counts_for_person`**
+  были идентичны один-в-один, кроме имени колонки (`xuid` vs `tg_id`) —
+  собраны в общий `_achievement_counts_by(column, value, since)`.
+  `achievement_counts_by_xuid` заодно переведён с дублированного
+  `if since is None: .../else: ...` на тот же стиль условного `AND`, что
+  уже был у `achievement_platform_breakdown`/`chat_member_stats`.
+- **`admin.py`: чанкование `deleteMessages` по 100** было продублировано
+  между безусловным «Стереть сообщения бота» и парой «системных» вайпов —
+  собрано в `_bulk_delete_messages()`, а сами три confirm-хендлера — в
+  один `_wipe_confirm(callback, repo, bot, chat_id, ids)`.
+- **`poller/rows.py`** — `ParsedAchievement → AchievementRow` был
+  продублирован байт-в-байт в `fetcher.py` и `steam_fetcher.py`. Не
+  переехал в `services/models.py` — там прямо в докстринге написано, что
+  этот модуль не должен знать про `db.repo.AchievementRow` (SPEC 1.5) —
+  вместо этого общий модуль на стороне поллера, как `cadence.py`.
 
 Деплой не подтверждён.
 

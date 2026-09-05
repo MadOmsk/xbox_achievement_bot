@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from bot.db.repo import AchievementRow, Repo, TitleHistoryRow
 from bot.poller.publisher import Publisher
+from bot.poller.rows import to_achievement_row
 from bot.services.xbox.client import TitleHistoryEntry, XboxApiError, XboxClient
 from bot.services.xbox.models import ParsedAchievement, Platform
 from bot.util import parse_iso, utcnow
@@ -41,7 +42,7 @@ class Fetcher:
         """Fetch one game's achievements, keep the new ones, publish them."""
         parsed = await self._client.title_achievements(tg_id, title_id, platform)
         await self._fill_x360_icon(tg_id, title_id, platform, parsed)
-        rows = [_to_row(item) for item in parsed]
+        rows = [to_achievement_row(item) for item in parsed]
         new_rows = await self._repo.insert_new_achievements(xuid, rows, is_backfill=False)
         await self._repo.mark_achievements_polled(xuid)
         if not new_rows:
@@ -116,7 +117,7 @@ class Fetcher:
         old achievements into the chat.
         """
         async with self._backfill_slots:
-            rows = [_to_row(item) for item in await self._client.all_achievements(tg_id)]
+            rows = [to_achievement_row(item) for item in await self._client.all_achievements(tg_id)]
 
             # Contract 2 covers modern titles only — verified against a live
             # account, where an Xbox 360 game with 33 unlocked achievements was
@@ -131,7 +132,7 @@ class Fetcher:
                 except XboxApiError as exc:
                     log.info("x360 backfill of %s skipped: %s", entry.title_id, exc)
                     continue
-                rows.extend(_to_row(item) for item in parsed)
+                rows.extend(to_achievement_row(item) for item in parsed)
 
             await self._repo.insert_new_achievements(xuid, rows, is_backfill=True)
             await self._save_history(tg_id, xuid, history)
@@ -175,7 +176,7 @@ class Fetcher:
                 await self._fill_x360_icon(tg_id, entry.title_id, entry.platform, parsed)
 
                 new_rows = await self._repo.insert_new_achievements(
-                    xuid, [_to_row(item) for item in parsed], is_backfill=False
+                    xuid, [to_achievement_row(item) for item in parsed], is_backfill=False
                 )
                 fresh = [row for row in new_rows if _unlocked_after(row, publish_after)]
                 if fresh:
@@ -244,22 +245,6 @@ class Fetcher:
             return
         if total is not None:
             await self._repo.update_gamerscore(tg_id, total)
-
-
-def _to_row(item: ParsedAchievement) -> AchievementRow:
-    return AchievementRow(
-        title_id=item.title_id,
-        achievement_id=item.achievement_id,
-        name=item.name,
-        description=item.description,
-        icon_url=item.icon_url,
-        unlocked_at=item.unlocked_at.isoformat(timespec="seconds") if item.unlocked_at else None,
-        gamerscore=item.gamerscore,
-        rarity_percent=item.rarity_percent,
-        platform=item.platform,
-        title_name=item.title_name,
-        is_secret=item.is_secret,
-    )
 
 
 def _played_since(

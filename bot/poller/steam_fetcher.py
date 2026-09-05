@@ -13,7 +13,7 @@ import logging
 
 from bot.db.repo import AchievementRow, Repo
 from bot.poller.publisher import Publisher
-from bot.services.models import ParsedAchievement
+from bot.poller.rows import to_achievement_row
 from bot.services.steam.achievements import fetch_unlocked
 from bot.services.steam.client import OwnedGame, SteamApiError, get_owned_games
 
@@ -47,7 +47,7 @@ class SteamFetcher:
     ) -> int:
         """Fetch one game's achievements, keep the new ones, publish them."""
         parsed = await fetch_unlocked(self._repo, self._api_key, steam_id, appid)
-        rows = [_to_row(item) for item in parsed]
+        rows = [to_achievement_row(item) for item in parsed]
         new_rows = await self._repo.insert_new_achievements_steam(
             tg_id, steam_id, rows, is_backfill=False
         )
@@ -77,7 +77,7 @@ class SteamFetcher:
                     except SteamApiError as exc:
                         log.info("steam backfill of appid=%s skipped: %s", game.appid, exc)
                         return
-                    rows.extend(_to_row(item) for item in parsed)
+                    rows.extend(to_achievement_row(item) for item in parsed)
 
             await asyncio.gather(*(one(game) for game in games))
             await self._repo.insert_new_achievements_steam(
@@ -85,19 +85,3 @@ class SteamFetcher:
             )
             log.info("steam backfill for tg_id=%s stored %s achievements", tg_id, len(rows))
             return len(rows)
-
-
-def _to_row(item: ParsedAchievement) -> AchievementRow:
-    return AchievementRow(
-        title_id=item.title_id,
-        achievement_id=item.achievement_id,
-        name=item.name,
-        description=item.description,
-        icon_url=item.icon_url,
-        unlocked_at=item.unlocked_at.isoformat(timespec="seconds") if item.unlocked_at else None,
-        gamerscore=item.gamerscore,
-        rarity_percent=item.rarity_percent,
-        platform=item.platform,
-        title_name=item.title_name,
-        is_secret=item.is_secret,
-    )

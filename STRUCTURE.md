@@ -57,6 +57,7 @@
 │   ├── poller/                  — фоновые задачи (APScheduler)
 │   │   ├── scheduler.py           — тики, сборка джобов
 │   │   ├── cadence.py             — общая математика интервалов/дебаунса для обоих presence-поллеров
+│   │   ├── rows.py                — ParsedAchievement → AchievementRow, общий для fetcher/steam_fetcher
 │   │   ├── presence.py            — шаг 1: Xbox presence, интервалы по состоянию
 │   │   ├── steam_presence.py      — Steam-презенс, тот же шаг 1, свой batch-запрос (M-Steam-2c)
 │   │   ├── fetcher.py             — шаг 2: ачивки Xbox по игре, история игр, бэкфил
@@ -112,6 +113,7 @@
 │   ├── test_filters.py            — фильтры публикации (редкость, Xbox 360, мьюты), format_single/digest
 │   ├── test_poller.py             — дедуп, бэкфил, догон после простоя, исключённые юзеры
 │   ├── test_cadence.py            — общая математика интервалов/дебаунса (poller/cadence.py)
+│   ├── test_rows.py               — ParsedAchievement → AchievementRow (poller/rows.py)
 │   ├── test_presence_title.py     — резолв названия игры из presence (Xbox)
 │   ├── test_stats.py              — счётчики, окна «сегодня»/«за месяц»
 │   ├── test_stats_display.py      — гeймерскор из профиля, лимит игр и кнопка «показать все»
