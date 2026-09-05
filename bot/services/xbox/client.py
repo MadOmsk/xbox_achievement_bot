@@ -70,6 +70,13 @@ class TitleHistoryEntry:
     achievements_unlocked: int | None
     achievements_total: int | None
     last_played_at: str | None
+    # The game's own box art (titlehub's own `display_image`) — not an
+    # achievement icon. Only actually used as one, as a stand-in for Xbox
+    # 360 (fetcher.py's ensure_title_icon): contract 1's achievement
+    # payload carries a bare `imageId` int with no documented way to turn
+    # it into a URL at all (verified live against the real API — the raw
+    # response has nothing image-shaped besides that number).
+    icon_url: str | None = None
 
 
 class RateLimiter:
@@ -335,6 +342,7 @@ def _as_entry(title: object) -> TitleHistoryEntry:
         achievements_unlocked=getattr(achievement, "current_achievements", None),
         achievements_total=getattr(achievement, "total_achievements", None),
         last_played_at=_as_iso(getattr(history, "last_time_played", None)),
+        icon_url=getattr(title, "display_image", None) or None,
     )
 
 

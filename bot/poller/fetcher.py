@@ -40,6 +40,7 @@ class Fetcher:
     ) -> int:
         """Fetch one game's achievements, keep the new ones, publish them."""
         parsed = await self._client.title_achievements(tg_id, title_id, platform)
+        await self._fill_x360_icon(tg_id, title_id, platform, parsed)
         rows = [_to_row(item) for item in parsed]
         new_rows = await self._repo.insert_new_achievements(xuid, rows, is_backfill=False)
         await self._repo.mark_achievements_polled(xuid)
@@ -73,6 +74,40 @@ class Fetcher:
             return None
         await self._repo.upsert_title(entry.title_id, entry.name, entry.platform)
         return entry.name
+
+    async def ensure_title_icon(self, tg_id: int, title_id: str) -> str | None:
+        """Box art as a stand-in for an Xbox 360 achievement icon (SPEC 7.1)
+        — contract 1's achievement payload only ever carries a bare imageId
+        int, no documented way to turn it into a URL at all (verified live
+        against the real API: the raw response has nothing image-shaped
+        besides that number). No `from_presence` shortcut like
+        ensure_title_name has — presence never carries box art either way.
+        """
+        cached = await self._repo.title_icon_url(title_id)
+        if cached:
+            return cached
+        try:
+            entry = await self._client.resolve_title(tg_id, title_id)
+        except XboxApiError as exc:
+            log.info("could not resolve icon for title %s: %s", title_id, exc)
+            return None
+        if entry is None or not entry.icon_url:
+            return None
+        await self._repo.upsert_title(entry.title_id, entry.name, entry.platform, entry.icon_url)
+        return entry.icon_url
+
+    async def _fill_x360_icon(
+        self, tg_id: int, title_id: str, platform: Platform, parsed: list[ParsedAchievement]
+    ) -> None:
+        """Shared by poll_title() and catch_up() — both publish live x360
+        unlocks and must agree on the icon, not just the one that happens
+        to run more often."""
+        if platform != "x360":
+            return
+        icon_url = await self.ensure_title_icon(tg_id, title_id)
+        if icon_url:
+            for item in parsed:
+                item.icon_url = icon_url
 
     async def backfill(self, tg_id: int, xuid: str) -> int:
         """Mark everything already unlocked as seen, publishing nothing.
@@ -137,6 +172,7 @@ class Fetcher:
                 except XboxApiError as exc:
                     log.info("catch-up skipped title %s: %s", entry.title_id, exc)
                     continue
+                await self._fill_x360_icon(tg_id, entry.title_id, entry.platform, parsed)
 
                 new_rows = await self._repo.insert_new_achievements(
                     xuid, [_to_row(item) for item in parsed], is_backfill=False

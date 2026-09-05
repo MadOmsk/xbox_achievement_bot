@@ -214,6 +214,12 @@ CREATE TABLE IF NOT EXISTS titles (
     title_id   TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     platform   TEXT,               -- x360 / modern
+    -- The game's own box art (titlehub's display_image), not an achievement
+    -- icon — used as a stand-in icon for Xbox 360 achievement messages
+    -- (fetcher.py's ensure_title_icon): contract 1 only ever gives a bare
+    -- imageId int for an achievement, no documented way to turn it into a
+    -- URL (verified live against the real API).
+    icon_url   TEXT,
     updated_at TEXT NOT NULL
 );
 

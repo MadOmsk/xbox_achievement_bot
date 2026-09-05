@@ -1551,12 +1551,20 @@ class Repo:
         )
         await self._conn.commit()
 
-    async def upsert_title(self, title_id: str, name: str, platform: str | None) -> None:
+    async def upsert_title(
+        self, title_id: str, name: str, platform: str | None, icon_url: str | None = None
+    ) -> None:
+        # icon_url only overwrites when this call actually has one —
+        # ensure_title_name() (fetcher.py) upserts just the name/platform on
+        # every new title it resolves, and must not blank out an icon_url a
+        # separate ensure_title_icon() call already cached here.
         await self._conn.execute(
-            "INSERT INTO titles (title_id, name, platform, updated_at) VALUES (?, ?, ?, ?) "
+            "INSERT INTO titles (title_id, name, platform, icon_url, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(title_id) DO UPDATE SET name = excluded.name,"
-            " platform = excluded.platform, updated_at = excluded.updated_at",
-            (title_id, name, platform, utcnow_iso()),
+            " platform = excluded.platform, updated_at = excluded.updated_at,"
+            " icon_url = COALESCE(excluded.icon_url, titles.icon_url)",
+            (title_id, name, platform, icon_url, utcnow_iso()),
         )
         await self._conn.commit()
 
@@ -1564,6 +1572,13 @@ class Repo:
         cursor = await self._conn.execute("SELECT name FROM titles WHERE title_id = ?", (title_id,))
         row = await cursor.fetchone()
         return row["name"] if row else None
+
+    async def title_icon_url(self, title_id: str) -> str | None:
+        cursor = await self._conn.execute(
+            "SELECT icon_url FROM titles WHERE title_id = ?", (title_id,)
+        )
+        row = await cursor.fetchone()
+        return row["icon_url"] if row else None
 
     async def hltb_all_ids(self) -> list[int]:
         """For the one-off platforms backfill (scripts/backfill_hltb_platforms.py)

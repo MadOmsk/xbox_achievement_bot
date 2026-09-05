@@ -40,6 +40,7 @@ class FakeHistoryEntry:
     achievements_unlocked: int | None = 5
     achievements_total: int | None = 50
     last_played_at: str | None = "2026-09-01T10:00:00+00:00"
+    icon_url: str | None = None
 
 
 class FakeClient:
@@ -213,6 +214,40 @@ async def test_title_name_is_resolved_once_when_presence_has_none(repo: Repo, ci
     assert client.resolved == ["85494077"]
 
 
+async def test_x360_achievements_get_the_games_box_art_as_their_icon(
+    repo: Repo, cipher
+) -> None:
+    """Contract 1 never gives a per-achievement icon at all (verified live —
+    a bare imageId int, no documented way to turn it into a URL) — the
+    game's own box art (titlehub's display_image) stands in instead."""
+    await _connected_user(repo, cipher)
+    client = FakeClient(by_title={"360": [parsed("a1", title_id="360", platform="x360")]})
+    client.resolvable["360"] = FakeHistoryEntry(
+        "360", "Gears of War 3", "x360", icon_url="https://example/boxart.jpg"
+    )
+    publisher = FakePublisher()
+    fetcher = Fetcher(repo, client, publisher)  # type: ignore[arg-type]
+
+    await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "360", "x360", "Gears of War 3")
+
+    assert publisher.published[0][0].icon_url == "https://example/boxart.jpg"
+    assert await repo.title_icon_url("360") == "https://example/boxart.jpg"
+
+    # Second title, same game: the icon comes from the cache, not another request.
+    client.by_title["360"].append(parsed("a2", title_id="360", platform="x360"))
+    await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "360", "x360", "Gears of War 3")
+    assert client.resolved == ["360"]
+
+
+async def test_upsert_title_does_not_blank_a_cached_icon(repo: Repo) -> None:
+    """ensure_title_name() (fetcher.py) upserts just name/platform on every
+    new title it resolves — it must not erase an icon_url a separate
+    ensure_title_icon() call already cached for the same title."""
+    await repo.upsert_title("360", "Gears of War 3", "x360", "https://example/boxart.jpg")
+    await repo.upsert_title("360", "Gears of War 3", "x360")
+    assert await repo.title_icon_url("360") == "https://example/boxart.jpg"
+
+
 def parsed_at(achievement_id: str, when, title_id: str = "1") -> ParsedAchievement:
     item = parsed(achievement_id, title_id=title_id)
     item.unlocked_at = when
@@ -246,6 +281,31 @@ async def test_catch_up_publishes_only_what_is_fresh(repo: Repo, cipher) -> None
     assert [a.achievement_id for a in publisher.published[0]] == ["recent"]
     # The old ones are still recorded, so they never surface again as "new".
     assert await fetcher.poll_title(TG_ID, XUID, "Mad Omsk", "1", "modern", "Gears") == 0
+
+
+async def test_catch_up_also_fills_x360_box_art(repo: Repo, cipher) -> None:
+    """poll_title() and catch_up() both publish live x360 unlocks — the box
+    art fallback (ensure_title_icon) must not be something only one of the
+    two paths remembers to apply."""
+    await _connected_user(repo, cipher)
+    now = utcnow()
+    item = parsed("a1", title_id="360", platform="x360")
+    item.unlocked_at = now
+    client = FakeClient(
+        by_title={"360": [item]},
+        history=[
+            FakeHistoryEntry("360", "Gears of War 3", "x360", last_played_at=now.isoformat())
+        ],
+    )
+    client.resolvable["360"] = FakeHistoryEntry(
+        "360", "Gears of War 3", "x360", icon_url="https://example/boxart.jpg"
+    )
+    publisher = FakePublisher()
+    fetcher = Fetcher(repo, client, publisher)  # type: ignore[arg-type]
+
+    await fetcher.catch_up(TG_ID, XUID, "Mad Omsk", now - timedelta(days=1), 24, 20)
+
+    assert publisher.published[0][0].icon_url == "https://example/boxart.jpg"
 
 
 async def test_catch_up_skips_games_untouched_since_last_poll(repo: Repo, cipher) -> None:

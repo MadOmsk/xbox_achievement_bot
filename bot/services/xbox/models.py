@@ -156,7 +156,12 @@ class X360Achievement(BaseModel):
             title_name=None,  # contract 1 does not carry the title name
             name=self.name,
             description=self.description,
-            icon_url=None,  # imageId is not a URL and the CDN pattern is undocumented
+            # imageId is a bare int, no documented (or discoverable — checked
+            # the raw response live) way to turn it into a URL. Left None
+            # here on purpose: poller/fetcher.py's poll_title() fills in the
+            # game's own box art as a stand-in once it knows this is x360,
+            # a job for the poller layer, not this parser.
+            icon_url=None,
             unlocked_at=parse_timestamp(self.time_unlocked),
             gamerscore=self.gamerscore,
             rarity_percent=None,
