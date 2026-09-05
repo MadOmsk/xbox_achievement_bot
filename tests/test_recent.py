@@ -36,8 +36,48 @@ def test_recent_row_mentions_rarity_badge() -> None:
     assert _recent_row(row(rarity_percent=None)).startswith("🏆 ")
 
 
-def test_recent_row_gamerscore_is_in_parentheses() -> None:
-    assert "(+50 G)" in _recent_row(row(gamerscore=50))
+def test_recent_row_gamerscore_and_rarity_are_in_one_parenthetical() -> None:
+    assert "(+50 G · 2.4%)" in _recent_row(row(gamerscore=50, rarity_percent=2.4))
+
+
+def test_recent_row_hides_zero_gamerscore_but_keeps_rarity() -> None:
+    """Found live: every Steam row showed a flat "+0 G" — Steam achievements
+    have no gamerscore at all, same "0 is 0, don't name it" rule the
+    achievement message itself already follows (2026-09-05)."""
+    line = _recent_row(row(gamerscore=0, rarity_percent=12.0))
+    assert "G" not in line
+    assert "(12%)" in line
+
+
+def test_recent_row_rarity_has_no_label_word() -> None:
+    """Unlike the achievement message's own "редкость 12%" — /recent's
+    parenthetical is bare percentages, the badge already says rare or not
+    (2026-09-05)."""
+    line = _recent_row(row(rarity_percent=12.0))
+    assert "редкость" not in line
+    assert "12%" in line
+
+
+def test_recent_row_omits_the_parenthetical_entirely_when_nothing_to_show() -> None:
+    line = _recent_row(row(gamerscore=0, rarity_percent=None))
+    assert "(" not in line
+
+
+def test_recent_row_shows_the_platform_icon_before_the_game_name() -> None:
+    line = _recent_row(row(game="Left 4 Dead 2"))
+    steam_line = _recent_row(
+        RecentAchievement(
+            gamertag="Igor",
+            name="Boomer",
+            game="Left 4 Dead 2",
+            gamerscore=0,
+            rarity_percent=None,
+            platform="steam",
+            unlocked_at="2026-09-02T10:00:00+00:00",
+        )
+    )
+    assert "🟢 Left 4 Dead 2" in line  # default platform="modern" from row()
+    assert "⚫ Left 4 Dead 2" in steam_line
 
 
 def test_recent_row_long_names_are_truncated() -> None:

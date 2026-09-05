@@ -16,6 +16,7 @@ from bot.db.repo import Repo
 from bot.poller.daily import DailySummary
 from bot.poller.fetcher import Fetcher
 from bot.poller.message_cleanup import MessageCleanup
+from bot.poller.online_refresh import OnlineAutoRefresh
 from bot.poller.presence import PresencePoller
 from bot.poller.reminders import ReminderJob
 from bot.poller.steam_presence import SteamPresencePoller
@@ -35,6 +36,7 @@ class PollerScheduler:
         repo: Repo,
         steam_poller: SteamPresencePoller,
         message_cleanup: MessageCleanup,
+        online_refresh: OnlineAutoRefresh,
     ) -> None:
         self._poller = poller
         self._fetcher = fetcher
@@ -43,6 +45,7 @@ class PollerScheduler:
         self._repo = repo
         self._steam_poller = steam_poller
         self._message_cleanup = message_cleanup
+        self._online_refresh = online_refresh
         self._scheduler = AsyncIOScheduler(timezone="UTC")
 
     def start(self) -> None:
@@ -92,6 +95,13 @@ class PollerScheduler:
             self._message_cleanup.tick,
             IntervalTrigger(seconds=TICK_SECONDS),
             id="message_cleanup",
+            coalesce=True,
+            max_instances=1,
+        )
+        self._scheduler.add_job(
+            self._online_refresh.tick,
+            IntervalTrigger(seconds=TICK_SECONDS),
+            id="online_refresh",
             coalesce=True,
             max_instances=1,
         )

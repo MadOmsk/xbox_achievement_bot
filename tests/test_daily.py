@@ -7,6 +7,7 @@ from datetime import date as date_type
 
 from bot.db.repo import AchievementRow, Repo
 from bot.poller.daily import DailySummary, build_summary, full_leaderboard
+from bot.services.achievements import platform_breakdown_suffix
 from bot.util import utcnow
 
 CHAT_ID = -100500
@@ -80,11 +81,26 @@ async def test_summary_lists_everyone_and_marks_rare(repo: Repo) -> None:
     assert "<blockquote expandable>" in text and "</blockquote>" in text
 
 
-async def test_leaderboard_shows_platform_breakdown_only_with_two_platforms(repo: Repo) -> None:
+def test_platform_breakdown_suffix_always_flag() -> None:
+    """The function's own contract, direct — always=False (/stats' default)
+    hides a single-platform breakdown, always=True (/summary, 2026-09-05
+    second follow-up) keeps it. Either way, nothing to show stays nothing."""
+    assert platform_breakdown_suffix(3, 0) == ""
+    assert platform_breakdown_suffix(3, 0, always=True) == " (🟢 3)"
+    assert platform_breakdown_suffix(3, 5) == " (🟢 3 · ⚫ 5)"
+    assert platform_breakdown_suffix(3, 5, always=True) == " (🟢 3 · ⚫ 5)"
+    assert platform_breakdown_suffix(0, 0) == ""
+    assert platform_breakdown_suffix(0, 0, always=True) == ""
+
+
+async def test_leaderboard_shows_platform_breakdown_even_for_one_platform(repo: Repo) -> None:
     """2026-09-05 follow-up, reversal of "one combined number only": a
-    parenthetical next to the total, but only once there's something to
-    break down — a single-platform row must look exactly as it always
-    did (SPEC 9, M-Steam-2e's own leaderboard sort is untouched)."""
+    parenthetical next to the total. Unlike /stats (which already spells
+    out each platform on its own line above the counters), the leaderboard
+    has nothing else saying which platform a row's achievements came from
+    — so it shows the breakdown even for a single platform (2026-09-05,
+    second follow-up), where /stats stays silent (SPEC 9, M-Steam-2e's own
+    leaderboard sort is untouched either way)."""
     await repo.upsert_chat(CHAT_ID, "Гейминг-чат", 1)
     await repo.ensure_user(1, "both")
     await repo.link_xbox_account(1, XUID_A, "Both", 0)
@@ -124,7 +140,7 @@ async def test_leaderboard_shows_platform_breakdown_only_with_two_platforms(repo
     )
     assert "(🟢 1 · ⚫ 1)" in both_line
     xbox_only_line = next(line for line in text.split("\n") if "XboxOnly" in line)
-    assert "🟢" not in xbox_only_line and "⚫" not in xbox_only_line
+    assert "(🟢 1)" in xbox_only_line
 
 
 async def test_zero_scorers_still_appear(repo: Repo) -> None:

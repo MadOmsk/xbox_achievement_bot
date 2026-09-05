@@ -33,20 +33,29 @@ _PLATFORM_ICON = {"modern": "🟢", "x360": "🟢", "steam": "⚫", "psn": "🔵
 _PLATFORM_LABEL = {"modern": "XBOX", "x360": "XBOX 360", "steam": "Steam", "psn": "PlayStation"}
 
 
-def platform_breakdown_suffix(xbox_count: int, steam_count: int) -> str:
+def platform_breakdown_suffix(xbox_count: int, steam_count: int, *, always: bool = False) -> str:
     """The small "(🟢 3 · ⚫ 5)" next to a combined achievement total in
     /stats and /summary (2026-09-05 follow-up) — a parenthetical, not a
     second sort key or a second row: the combined number still leads and
-    still sorts, this is purely for reference. Empty for anyone with
-    achievements on only one platform in the window — nothing to break
-    down, and showing it anyway would just be noise on every single-
-    platform person's line."""
+    still sorts, this is purely for reference.
+
+    `always=False` (the default, used by /stats): empty for anyone with
+    achievements on only one platform in the window — /stats already spells
+    out each connected platform on its own line right above this, so
+    repeating the one platform here would just be noise.
+
+    `always=True` (/summary's leaderboard and the daily итог, which share
+    _leader_row, poller/daily.py): shows even for a single platform — a
+    leaderboard has no per-platform header to lean on, so "(🟢 3)" is the
+    only thing on the row saying which platform those achievements came
+    from at all. Still empty when there's nothing to show at all (a
+    zero-achievement row)."""
     parts = []
     if xbox_count:
         parts.append(f"{_PLATFORM_ICON['modern']} {xbox_count}")
     if steam_count:
         parts.append(f"{_PLATFORM_ICON['steam']} {steam_count}")
-    if len(parts) < 2:
+    if not parts or (len(parts) < 2 and not always):
         return ""
     return " (" + " · ".join(parts) + ")"
 

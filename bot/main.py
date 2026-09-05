@@ -29,6 +29,7 @@ from bot.lock import AlreadyRunningError, single_instance
 from bot.poller.daily import DailySummary
 from bot.poller.fetcher import Fetcher
 from bot.poller.message_cleanup import MessageCleanup
+from bot.poller.online_refresh import OnlineAutoRefresh
 from bot.poller.presence import PresencePoller
 from bot.poller.publisher import Publisher
 from bot.poller.reminders import ReminderJob
@@ -112,6 +113,7 @@ async def run(settings: Settings) -> None:
         repo,
         steam_poller,
         MessageCleanup(bot, repo),
+        OnlineAutoRefresh(bot, repo),
     )
 
     async def backfill(tg_id: int, xuid: str) -> None:

@@ -6,6 +6,7 @@ from bot.handlers.admin import (
     _LIMIT_MIN_OVERRIDES,
     LIMIT_MAX,
     LIMIT_MIN,
+    ONLINE_REFRESH_INTERVAL_KEY,
     RARE_THRESHOLD_MAX,
     RARE_THRESHOLD_MIN,
     SYSTEM_MESSAGE_TTL_KEY,
@@ -47,6 +48,7 @@ def test_only_summary_stats_and_ttl_limits_allow_zero() -> None:
         "summary_top_limit": 0,
         "stats_games_limit": 0,
         SYSTEM_MESSAGE_TTL_KEY: 0,
+        ONLINE_REFRESH_INTERVAL_KEY: 0,
     }
 
 

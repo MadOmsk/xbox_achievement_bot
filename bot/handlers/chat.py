@@ -30,11 +30,13 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.repo import ChatPresenceRow, PlatformLink, RecentAchievement, Repo, TopGame, User
+from bot.db.repo import PlatformLink, RecentAchievement, Repo, TopGame, User
 from bot.handlers.admin import IsAdmin
 from bot.poller.daily import build_summary, full_leaderboard
+from bot.poller.online_refresh import refresh_interval_minutes
 from bot.services.achievements import platform_breakdown_suffix, plural_achievements, rarity_badge
 from bot.services.message_log import stats_category
+from bot.services.online_view import render_online_table
 from bot.services.stats import counters_for, local_now
 from bot.services.tables import blockquote, truncate_name
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
@@ -191,10 +193,10 @@ def _games_list(games: list[TopGame]) -> str:
     return blockquote(rows)
 
 
-# Marker circles for the platform lines in /stats' header, and for
-# /online's per-name icon while online (_presence_icon below, SPEC 9,
-# M-Steam-2e — offline/no-data there stays grey, not platform-coloured).
-# PlayStation isn't linkable yet, kept for when it is.
+# Marker circles for /stats' header and its games list (SPEC 9, M-Steam-2e)
+# — /online's own copy moved to services/online_view.py (Follow-up
+# 2026-09-05, needed there too, from the auto-refresh poller). PlayStation
+# isn't linkable yet, kept for when it is.
 _PLATFORM_ICON = {"modern": "🟢", "steam": "⚫", "psn": "🔵"}
 _PLATFORM_LABEL = {"steam": "Steam", "psn": "PlayStation"}
 
@@ -303,28 +305,6 @@ async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
 # --------------------------------------------------------------------- online
 
 
-def _presence_text(row: ChatPresenceRow) -> str:
-    if row.state == "Online" and row.title_id:
-        return f"играет — {row.title_name or row.title_id}"
-    if row.state == "Online":
-        return "в сети, не играет"
-    if row.state is not None:
-        return "не в сети"
-    return "нет данных"
-
-
-def _presence_icon(row: ChatPresenceRow) -> str:
-    # Platform colour while online (SPEC 9, M-Steam-2e; same palette as
-    # /stats) — but grey for offline/no data regardless of platform.
-    # Found live: a pure platform colour made every offline row look the
-    # same as an online one at a glance, losing the one signal a colour
-    # is actually good for — grey is the "nothing to see here" cue, and
-    # that's true the same way on every platform.
-    if row.state != "Online":
-        return "⚪"
-    return _PLATFORM_ICON.get(row.platform, "⚪")
-
-
 @router.message(Command("online"))
 async def online(message: Message, repo: Repo) -> None:
     if message.chat.type not in GROUP_TYPES:
@@ -340,12 +320,18 @@ async def online(message: Message, repo: Repo) -> None:
     # Plain text, no per-name buttons: a keyboard row per player stops being a
     # list and starts being a second keyboard once a chat has more than a
     # few people. Picking someone to look up is /who's job, not this one's.
-    lines = ["🎮 <b>Онлайн-статус игроков</b>", ""]
-    for row in rows:
-        name = row.gamertag or f"id{row.tg_id}"
-        lines.append(f"{_presence_icon(row)} {name} — {_presence_text(row)}")
+    settings_row = await repo.get_chat_daily_settings(message.chat.id)
+    updated_label = local_now(settings_row.tz_offset_min).strftime("%H:%M")
+    text = render_online_table(rows, updated_label)
     with stats_category():
-        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+        sent = await message.answer(text, parse_mode=ParseMode.HTML)
+
+    # Follow-up 2026-09-05: /online now keeps itself fresh for a while
+    # instead of being a one-off snapshot — skipped entirely when the admin
+    # has turned the interval down to 0 (services/online_view.py's own
+    # render is still exactly what a manual re-run would produce).
+    if await refresh_interval_minutes(repo) > 0:
+        await repo.start_online_auto_refresh(message.chat.id, sent.message_id)
 
 
 @router.message(Command("who"))
@@ -510,8 +496,21 @@ def _recent_row(row: RecentAchievement) -> str:
     badge = rarity_badge(row.rarity_percent)
     gamertag = html_escape(truncate_name(row.gamertag or "кто-то"))
     game = html_escape(truncate_name(row.game or "без названия"))
+    icon = _PLATFORM_ICON.get(row.platform, "⚪")
+    # Found live: every Steam row showed a flat "+0 G" — Steam achievements
+    # have no gamerscore at all (services/steam/achievements.py), same
+    # "0 is 0 on any platform, don't name it" rule the achievement message
+    # itself already follows (services/achievements.py's _rarity_line).
+    # Rarity here is a bare percentage, no "редкость" label — the badge
+    # already says "rare or not", the number is just the detail behind it.
+    tail = []
+    if row.gamerscore:
+        tail.append(f"+{thousands(row.gamerscore)} G")
+    if row.rarity_percent is not None:
+        tail.append(f"{row.rarity_percent:g}%")
+    tail_text = f" ({' · '.join(tail)})" if tail else ""
     return (
-        f"{badge} {gamertag} — {name}, {game} (+{thousands(row.gamerscore)} G)"
+        f"{badge} {gamertag} — {name}, {icon} {game}{tail_text}"
         f" · {humanize_ago(row.unlocked_at)}"
     )
 

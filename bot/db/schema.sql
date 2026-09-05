@@ -276,6 +276,18 @@ CREATE TABLE IF NOT EXISTS bot_messages (
     PRIMARY KEY (chat_id, message_id)
 );
 
+-- /online's live-updating table (Follow-up 2026-09-05, poller/online_refresh.py)
+-- — one row per chat, not per message: a fresh /online supersedes whatever
+-- was auto-refreshing before (the old message just goes stale, harmless).
+-- created_at is what the 3h cutoff measures from, independent of how often
+-- last_updated_at (the 10-minute refresh clock) has actually ticked.
+CREATE TABLE IF NOT EXISTS online_auto_refresh (
+    chat_id         INTEGER PRIMARY KEY REFERENCES chats(chat_id) ON DELETE CASCADE,
+    message_id      INTEGER NOT NULL,
+    created_at      TEXT NOT NULL,
+    last_updated_at TEXT NOT NULL
+);
+
 -- One person, several platform accounts (M-Steam-1, TODO.md) — Xbox stays in
 -- users.xuid unchanged (nothing about it needs to change to add a second
 -- platform), this is only for accounts beyond it. No tokens here on purpose:

@@ -43,6 +43,7 @@
 │   │   ├── tables.py             — общий рендерер моноширинных таблиц (SPEC 1.6)
 │   │   ├── hltb.py               — обёртка над howlongtobeatpy, кэш в hltb_cache
 │   │   ├── message_log.py        — request-мидлварь: лог исходящих сообщений в группы
+│   │   ├── online_view.py        — рендер таблицы /online, общий для команды и автообновления
 │   │   ├── notify.py             — уведомления администратору
 │   │   ├── crypto.py             — шифрование refresh-токенов (Fernet)
 │   │   ├── xbox/                 — всё про Xbox Live, ничего про Telegram
@@ -63,7 +64,8 @@
 │   │   ├── publisher.py           — шаг 3: публикация, дайджест, очередь Telegram
 │   │   ├── daily.py               — ежедневный итог + /summary по требованию
 │   │   ├── reminders.py           — напоминания о протухшем входе (SPEC 5.1.1)
-│   │   └── message_cleanup.py     — автоудаление системных сообщений в группах (Follow-up 2026-09-05)
+│   │   ├── message_cleanup.py     — автоудаление системных сообщений в группах (Follow-up 2026-09-05)
+│   │   └── online_refresh.py      — автообновление таблицы /online (Follow-up 2026-09-05)
 │   │
 │   ├── web/
 │   │   └── oauth.py               — aiohttp-колбэк Microsoft
@@ -91,7 +93,8 @@
 │           ├── 017_steam_presence_grace.sql     — last_active_* для grace-периода поллера
 │           ├── 018_titles_icon_url.sql          — обложка игры как иконка для ачивок Xbox 360
 │           ├── 019_digest_threshold_per_chat.sql — digest_threshold: subscriptions, не user_settings
-│           └── 020_bot_messages_is_system.sql    — bot_messages.is_system (автоудаление, Follow-up 2026-09-05)
+│           ├── 020_bot_messages_is_system.sql    — bot_messages.is_system (автоудаление, Follow-up 2026-09-05)
+│           └── 021_online_auto_refresh.sql       — online_auto_refresh (автообновление /online, Follow-up 2026-09-05)
 │
 ├── scripts/                    — вспомогательные скрипты вне приложения, разовые/ручные
 │   ├── db_status.py              — сводка по базе для `manage.ps1 status` (без зависимостей)
@@ -125,6 +128,8 @@
 │   ├── test_notify.py             — уведомления администратору
 │   ├── test_message_log.py        — лог сообщений бота, is_system, stats_category()
 │   ├── test_message_cleanup.py    — автоудаление системных сообщений по TTL
+│   ├── test_online_view.py        — рендер таблицы /online (presence_text/icon, шапка "Обновлено")
+│   ├── test_online_refresh.py     — автообновление /online: интервал, TTL, one-row-per-chat
 │   ├── test_hltb.py               — поиск/кэш HLTB, пагинация, очистка запроса
 │   ├── test_steam.py              — разбор ссылки/ID, привязка аккаунта (M-Steam-1)
 │   ├── test_steam_connect.py      — флоу входа в Steam: prompt_for_link, AwaitingSteamLink

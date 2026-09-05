@@ -33,6 +33,10 @@ from bot.handlers.keyboards import (
 from bot.poller.fetcher import Fetcher
 from bot.poller.message_cleanup import DEFAULT_TTL_MINUTES as DEFAULT_SYSTEM_MESSAGE_TTL_MIN
 from bot.poller.message_cleanup import TTL_SETTING_KEY as SYSTEM_MESSAGE_TTL_KEY
+from bot.poller.online_refresh import DEFAULT_REFRESH_INTERVAL_MIN as DEFAULT_ONLINE_REFRESH_MIN
+from bot.poller.online_refresh import DEFAULT_TTL_HOURS as DEFAULT_ONLINE_REFRESH_TTL_HOURS
+from bot.poller.online_refresh import REFRESH_INTERVAL_KEY as ONLINE_REFRESH_INTERVAL_KEY
+from bot.poller.online_refresh import TTL_HOURS_KEY as ONLINE_REFRESH_TTL_KEY
 from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 from bot.services.tables import truncate_name
 from bot.util import humanize_ago, parse_utc_offset, utcnow
@@ -112,6 +116,8 @@ _LIMIT_LABELS = {
     "hltb_results_limit": "Результатов поиска и подсказок HLTB",
     "hltb_page_size": "Результатов на странице (HLTB)",
     SYSTEM_MESSAGE_TTL_KEY: "Автоудаление системных сообщений (мин)",
+    ONLINE_REFRESH_INTERVAL_KEY: "Интервал автообновления /online (мин)",
+    ONLINE_REFRESH_TTL_KEY: "Автообновление /online, часов",
 }
 _LIMIT_DEFAULTS = {
     "summary_top_limit": "15",
@@ -119,25 +125,35 @@ _LIMIT_DEFAULTS = {
     "hltb_results_limit": "20",
     "hltb_page_size": "5",
     SYSTEM_MESSAGE_TTL_KEY: str(DEFAULT_SYSTEM_MESSAGE_TTL_MIN),
+    ONLINE_REFRESH_INTERVAL_KEY: str(DEFAULT_ONLINE_REFRESH_MIN),
+    ONLINE_REFRESH_TTL_KEY: str(DEFAULT_ONLINE_REFRESH_TTL_HOURS),
 }
 # hltb_page_size feeds Telegram inline-keyboard rows directly — 50 buttons on
 # one page would be unusable, unlike the other two below (a list inside a
 # collapsible quote, SPEC 1.6, not a keyboard grid).
-_LIMIT_MAX_OVERRIDES = {"hltb_page_size": 10, SYSTEM_MESSAGE_TTL_KEY: 60}
+_LIMIT_MAX_OVERRIDES = {
+    "hltb_page_size": 10,
+    SYSTEM_MESSAGE_TTL_KEY: 60,
+    ONLINE_REFRESH_INTERVAL_KEY: 60,
+    ONLINE_REFRESH_TTL_KEY: 24,
+}
 # summary_top_limit/stats_games_limit render into a <blockquote expandable>
 # now, not a fixed-width table — an "unlimited" list fits there just fine
 # (SPEC 1.6), so these two alone allow 0 for "no cap". hltb's two stay at 1:
 # a page size or a search pool of 0 is just broken, not "show everything".
-# system_message_ttl_min's own 0 means something else again — "off", not
-# "no cap" — see _ZERO_LABELS below.
+# system_message_ttl_min/online_refresh_interval_min's own 0 means something
+# else again — "off", not "no cap" — see _ZERO_LABELS below. online_refresh_
+# ttl_hours stays at the default min (1): a 0-hour window is just "off"
+# spelled a more confusing way than the interval's own off switch already is.
 _LIMIT_MIN_OVERRIDES = {
     "summary_top_limit": 0,
     "stats_games_limit": 0,
     SYSTEM_MESSAGE_TTL_KEY: 0,
+    ONLINE_REFRESH_INTERVAL_KEY: 0,
 }
 
 UNLIMITED_LABEL = "без ограничения"
-_ZERO_LABELS = {SYSTEM_MESSAGE_TTL_KEY: "выключено"}
+_ZERO_LABELS = {SYSTEM_MESSAGE_TTL_KEY: "выключено", ONLINE_REFRESH_INTERVAL_KEY: "выключено"}
 
 
 def _format_limit(key: str, value: str) -> str:

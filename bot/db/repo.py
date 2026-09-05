@@ -211,6 +211,18 @@ class ChatPresenceRow:
 
 
 @dataclass(slots=True)
+class OnlineAutoRefreshRow:
+    """One chat's live-updating /online table (Follow-up 2026-09-05,
+    poller/online_refresh.py). Timestamps are raw ISO strings, like
+    everywhere else in this module — the poller parses them."""
+
+    chat_id: int
+    message_id: int
+    created_at: str
+    last_updated_at: str
+
+
+@dataclass(slots=True)
 class ChatMemberStat:
     tg_id: int
     gamertag: str | None
@@ -1361,6 +1373,48 @@ class Repo:
                 title_id=row["title_id"],
                 title_name=row["title_name"],
                 platform=row["platform"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
+    async def start_online_auto_refresh(self, chat_id: int, message_id: int) -> None:
+        """A fresh /online supersedes whatever was auto-refreshing in this
+        chat before (Follow-up 2026-09-05, poller/online_refresh.py) — the
+        old message just goes stale, nothing needs to actively stop it.
+        Both timestamps reset: created_at is the 3h cutoff's own clock,
+        independent of whatever the previous table's age was."""
+        now = utcnow_iso()
+        await self._conn.execute(
+            "INSERT INTO online_auto_refresh (chat_id, message_id, created_at, last_updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET"
+            " message_id = excluded.message_id, created_at = excluded.created_at,"
+            " last_updated_at = excluded.last_updated_at",
+            (chat_id, message_id, now, now),
+        )
+        await self._conn.commit()
+
+    async def touch_online_auto_refresh(self, chat_id: int) -> None:
+        await self._conn.execute(
+            "UPDATE online_auto_refresh SET last_updated_at = ? WHERE chat_id = ?",
+            (utcnow_iso(), chat_id),
+        )
+        await self._conn.commit()
+
+    async def delete_online_auto_refresh(self, chat_id: int) -> None:
+        await self._conn.execute("DELETE FROM online_auto_refresh WHERE chat_id = ?", (chat_id,))
+        await self._conn.commit()
+
+    async def all_online_auto_refreshes(self) -> list[OnlineAutoRefreshRow]:
+        cursor = await self._conn.execute(
+            "SELECT chat_id, message_id, created_at, last_updated_at FROM online_auto_refresh"
+        )
+        return [
+            OnlineAutoRefreshRow(
+                chat_id=row["chat_id"],
+                message_id=row["message_id"],
+                created_at=row["created_at"],
+                last_updated_at=row["last_updated_at"],
             )
             for row in await cursor.fetchall()
         ]
