@@ -69,13 +69,18 @@ async def admin_home(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> N
     await _redraw(callback, *await _home(repo, fetcher))
 
 
+@router.callback_query(F.data == "a:newusers")
+async def new_user_defaults_menu(callback: CallbackQuery, repo: Repo) -> None:
+    await _redraw(callback, *await _new_user_defaults(repo))
+
+
 @router.callback_query(F.data == "a:defaultrarity")
-async def default_rarity_cycle(callback: CallbackQuery, repo: Repo, fetcher: Fetcher) -> None:
+async def default_rarity_cycle(callback: CallbackQuery, repo: Repo) -> None:
     current = await repo.get_app_setting(DEFAULT_RARITY_MODE_KEY, DEFAULT_RARITY_MODE_DEFAULT)
     assert current is not None
     mode = next_rarity_mode(current)
     await repo.set_app_setting(DEFAULT_RARITY_MODE_KEY, mode, callback.from_user.id)
-    await _redraw(callback, *await _home(repo, fetcher))
+    await _redraw(callback, *await _new_user_defaults(repo))
 
 
 # ------------------------------------------------------ free-text numeric settings
@@ -470,6 +475,33 @@ async def chat_toggle_active(callback: CallbackQuery, repo: Repo) -> None:
     await _redraw(callback, *await _chat(repo, chat_id))
 
 
+@router.callback_query(F.data.startswith("a:cdellast:"))
+async def chat_delete_last(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    """The admin panel's own way in to /delete_last's logic (chat.py) —
+    found live: an admin looking to undo the bot's last message in a chat
+    went looking for it here first, not the group chat itself. Same target
+    (the last *non-system* message, 2026-09-05) and same "expected failure,
+    forget the row either way" handling, just reached from the chat card
+    instead of typed into the chat."""
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    message_id = await repo.last_non_system_bot_message(chat_id)
+    if message_id is None:
+        await callback.answer("Не нашёл сообщений бота в этом чате.", show_alert=True)
+        return
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        log.info("admin delete_last failed for chat %s message %s", chat_id, message_id)
+        await repo.forget_bot_messages(chat_id, [message_id])
+        await callback.answer(
+            "Не смог удалить — возможно, сообщение слишком старое.", show_alert=True
+        )
+        return
+    await repo.forget_bot_messages(chat_id, [message_id])
+    await callback.answer("Удалил последнее сообщение.")
+
+
 WIPE_WINDOW_HOURS = 24
 
 
@@ -612,10 +644,6 @@ async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup
     active = sum(1 for u in users if u.token_status == "active" and not u.is_excluded)
     excluded = sum(1 for u in users if u.is_excluded)
     broken = sum(1 for u in users if u.token_status != "active")
-    default_rarity_mode = await repo.get_app_setting(
-        DEFAULT_RARITY_MODE_KEY, DEFAULT_RARITY_MODE_DEFAULT
-    )
-    assert default_rarity_mode is not None  # a default was given above
 
     text = (
         "⚙️ Администрирование\n\n"
@@ -628,15 +656,41 @@ async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Новые пользователи ▸", callback_data="a:newusers")],
+            [InlineKeyboardButton(text="Лимиты таблиц ▸", callback_data="a:limits")],
+            [InlineKeyboardButton(text="Пользователи ▸", callback_data="a:users:0")],
+            [InlineKeyboardButton(text="Чаты ▸", callback_data="a:chats")],
+        ]
+    )
+    return text, keyboard
+
+
+async def _new_user_defaults(repo: Repo) -> tuple[str, InlineKeyboardMarkup]:
+    """Settings that only ever apply at the moment someone new subscribes —
+    grouped on their own screen (2026-09-05 follow-up) rather than sitting
+    on the home screen forever, since none of them affect anyone already
+    subscribed. Just default_rarity_mode for now (SPEC 9, M-Steam-2e's own
+    Repo.subscribe reads it) — the natural home for anything else of the
+    same shape added later."""
+    default_rarity_mode = await repo.get_app_setting(
+        DEFAULT_RARITY_MODE_KEY, DEFAULT_RARITY_MODE_DEFAULT
+    )
+    assert default_rarity_mode is not None  # a default was given above
+
+    text = (
+        "👤 Новые пользователи — настройки по умолчанию\n\n"
+        "Действует только на подписки, оформленные с этого момента — "
+        "уже существующие не трогает."
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=f"Ачивки по умолчанию: {format_rarity(default_rarity_mode)} ▸",
                     callback_data="a:defaultrarity",
                 )
             ],
-            [InlineKeyboardButton(text="Лимиты таблиц ▸", callback_data="a:limits")],
-            [InlineKeyboardButton(text="Пользователи ▸", callback_data="a:users:0")],
-            [InlineKeyboardButton(text="Чаты ▸", callback_data="a:chats")],
+            [InlineKeyboardButton(text="‹ Назад", callback_data="a:home")],
         ]
     )
     return text, keyboard
@@ -796,6 +850,11 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         InlineKeyboardButton(
             text="⏸ Отключить чат" if chat.is_active else "▶️ Включить чат",
             callback_data=f"a:coff:{chat_id}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🗑 Удалить последнее сообщение", callback_data=f"a:cdellast:{chat_id}"
         )
     )
     builder.row(

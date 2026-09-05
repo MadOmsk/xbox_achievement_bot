@@ -1899,6 +1899,27 @@ class Repo:
             for row in await cursor.fetchall()
         ]
 
+    async def platform_links_all(self, platform: str) -> list[PlatformLink]:
+        """Every linked account on one platform, across every user —
+        `platform_links_of` narrowed to one person, this is the admin-wide
+        counterpart (2026-09-05, scripts/backfill_steam_titles.py: needs
+        every Steam link to reconcile, not any one person's)."""
+        cursor = await self._conn.execute(
+            "SELECT tg_id, platform, external_id, display_name, linked_at "
+            "FROM platform_links WHERE platform = ?",
+            (platform,),
+        )
+        return [
+            PlatformLink(
+                tg_id=row["tg_id"],
+                platform=row["platform"],
+                external_id=row["external_id"],
+                display_name=row["display_name"],
+                linked_at=row["linked_at"],
+            )
+            for row in await cursor.fetchall()
+        ]
+
     async def unlink_platform_account(self, tg_id: int, platform: str) -> None:
         await self._conn.execute(
             "DELETE FROM platform_links WHERE tg_id = ? AND platform = ?", (tg_id, platform)

@@ -62,7 +62,8 @@
 │   │   ├── steam_fetcher.py       — шаг 2: ачивки Steam по игре, бэкфил при привязке (M-Steam-2d)
 │   │   ├── publisher.py           — шаг 3: публикация, дайджест, очередь Telegram
 │   │   ├── daily.py               — ежедневный итог + /summary по требованию
-│   │   └── reminders.py           — напоминания о протухшем входе (SPEC 5.1.1)
+│   │   ├── reminders.py           — напоминания о протухшем входе (SPEC 5.1.1)
+│   │   └── message_cleanup.py     — автоудаление системных сообщений в группах (Follow-up 2026-09-05)
 │   │
 │   ├── web/
 │   │   └── oauth.py               — aiohttp-колбэк Microsoft
@@ -89,12 +90,14 @@
 │           ├── 016_rarity_mode_per_chat.sql     — rarity_mode: subscriptions, не user_settings
 │           ├── 017_steam_presence_grace.sql     — last_active_* для grace-периода поллера
 │           ├── 018_titles_icon_url.sql          — обложка игры как иконка для ачивок Xbox 360
-│           └── 019_digest_threshold_per_chat.sql — digest_threshold: subscriptions, не user_settings
+│           ├── 019_digest_threshold_per_chat.sql — digest_threshold: subscriptions, не user_settings
+│           └── 020_bot_messages_is_system.sql    — bot_messages.is_system (автоудаление, Follow-up 2026-09-05)
 │
 ├── scripts/                    — вспомогательные скрипты вне приложения, разовые/ручные
 │   ├── db_status.py              — сводка по базе для `manage.ps1 status` (без зависимостей)
 │   ├── reconcile_achievements.py — разовый полный бэкфил истории ачивок
-│   └── backfill_hltb_platforms.py — разовое дозаполнение platforms в уже закэшированных играх
+│   ├── backfill_hltb_platforms.py — разовое дозаполнение platforms в уже закэшированных играх
+│   └── backfill_steam_titles.py  — разовое дозаполнение titles для уже сохранённых Steam-ачивок
 │
 ├── tests/                      — pytest + pytest-asyncio, реальные запросы запрещены
 │   ├── conftest.py                — фикстуры (репозиторий на временной базе и т.п.)
@@ -120,7 +123,8 @@
 │   ├── test_connect_service.py    — сквозной проброс origin_chat_id при входе
 │   ├── test_connect_payload.py    — разбор deep-link пейлоада /start
 │   ├── test_notify.py             — уведомления администратору
-│   ├── test_message_log.py        — лог сообщений бота, фильтр по типу чата, last_bot_message
+│   ├── test_message_log.py        — лог сообщений бота, is_system, stats_category()
+│   ├── test_message_cleanup.py    — автоудаление системных сообщений по TTL
 │   ├── test_hltb.py               — поиск/кэш HLTB, пагинация, очистка запроса
 │   ├── test_steam.py              — разбор ссылки/ID, привязка аккаунта (M-Steam-1)
 │   ├── test_steam_connect.py      — флоу входа в Steam: prompt_for_link, AwaitingSteamLink

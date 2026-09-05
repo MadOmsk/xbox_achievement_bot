@@ -310,3 +310,17 @@ async def test_unlink_removes_the_account(repo: Repo) -> None:
     await repo.unlink_platform_account(1, "steam")
 
     assert await repo.get_platform_link(1, "steam") is None
+
+
+async def test_platform_links_all_spans_every_user(repo: Repo) -> None:
+    """scripts/backfill_steam_titles.py's own way in — needs every Steam
+    link across the whole bot, not any one person's (2026-09-05)."""
+    await repo.ensure_user(1, "one")
+    await repo.ensure_user(2, "two")
+    await repo.link_platform_account(1, "steam", "111", "One")
+    await repo.link_platform_account(2, "steam", "222", "Two")
+    await repo.link_xbox_account(1, "xuid-1", "OneXbox", 0)  # a different platform, not returned
+
+    links = await repo.platform_links_all("steam")
+
+    assert sorted(link.external_id for link in links) == ["111", "222"]
