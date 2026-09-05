@@ -97,20 +97,6 @@ def _passes_rarity(achievement: AchievementRow, mode: str, threshold: float) -> 
     return achievement.rarity_percent <= threshold
 
 
-def platform_note(platform: str, rarity_percent: float | None) -> str:
-    """The trailing " · 2.4%" of a line.
-
-    Keyed on the platform, not on a missing rarity: backfilled rows come from
-    contract 2, which carries no rarity at all, and a modern game must not be
-    labelled "Xbox 360" because of that.
-    """
-    if platform == "x360":
-        return " · Xbox 360"
-    if rarity_percent is None:
-        return ""
-    return f" · {rarity_percent:g}%"
-
-
 def _spoiler(text: str, *, secret: bool) -> str:
     """Wraps already-escaped HTML text in a Telegram spoiler (SPEC 5.5, 7.1).
 
@@ -122,60 +108,85 @@ def _spoiler(text: str, *, secret: bool) -> str:
     return f'<span class="tg-spoiler">{text}</span>' if secret else text
 
 
-def format_single(gamertag: str, achievement: AchievementRow, title_name: str | None) -> str:
-    """SPEC 9, M-Steam-2e — the platform is the headline (found live: a
-    Steam achievement with no platform mention was easy to miss among Xbox
-    ones), but the game title still leads the second line as it always
-    did — dropped briefly on the assumption the icon said enough, put back
-    once it turned out people do want it at a glance.
+def _rarity_line(achievement: AchievementRow) -> str:
+    """"(лого редкости)«название» · G · редкость %" — badge leads the name
+    rather than trailing the percentage (standardized form, 2026-09-05
+    follow-up); gamerscore appears only when it isn't 0, replacing the
+    older platform-keyed rules (Steam/PSN got a hardcoded "no G" each) —
+    zero is zero on any platform, no need to name which ones have none at
+    all (SPEC 9, future platforms fall under this for free).
     """
-    tag = platform_tag(achievement.platform)
-    # "трофей" is PSN's own word for these, not built yet — this is the one
-    # spot ready for it (SPEC 9, future): everything else about the message
-    # (gamerscore vs. a trophy colour vs. nothing) already branches on
-    # platform the same way.
-    verb = "получает трофей" if achievement.platform == "psn" else "получает достижение"
-    header = f"🏆 {html_escape(gamertag)} {verb} {tag}"
-
-    title = title_name or achievement.title_name or "неизвестная игра"
     name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
-    parts = [html_escape(title), f"«{name}»"]
-    # Steam has no gamerscore at all — services/steam/achievements.py always
-    # parses it as 0, and "0 G" reads as a real (if trivial) score rather
-    # than "not applicable here". PSN will show a trophy colour in this
-    # same slot once it exists, neither score nor "nothing" (SPEC 9, future).
-    if achievement.platform not in ("steam", "psn"):
-        parts.append(f"{achievement.gamerscore} G")
-    if achievement.platform != "x360" and achievement.rarity_percent is not None:
-        badge = rarity_badge(achievement.rarity_percent)
-        parts.append(f"редкость {achievement.rarity_percent:g}%{' ' + badge if badge else ''}")
-    text = f"{header}\n{' · '.join(parts)}"
+    badge = rarity_badge(achievement.rarity_percent)
+    name_part = f"{badge} «{name}»" if badge else f"«{name}»"
+
+    tail = []
+    if achievement.gamerscore:
+        tail.append(f"{achievement.gamerscore} G")
+    if achievement.rarity_percent is not None:
+        tail.append(f"редкость {achievement.rarity_percent:g}%")
+    return name_part if not tail else f"{name_part} · {' · '.join(tail)}"
+
+
+def _game_line(title: str, platform: str) -> str:
+    return f"{html_escape(title)} (<i>{platform_tag(platform)}</i>)"
+
+
+def format_single(gamertag: str, achievement: AchievementRow, title_name: str | None) -> str:
+    """Standardized form (2026-09-05 follow-up to SPEC 9, M-Steam-2e): one
+    fixed wording regardless of platform — PSN can reopen the "трофей"
+    wording once trophies are real data, not just a reserved word. Platform
+    moved off the header (found there for one round, then judged noisier
+    than useful) onto the game-title line, in italics, next to the game.
+    """
+    title = title_name or achievement.title_name or "неизвестная игра"
+    header = f"<b>{html_escape(gamertag)}</b> получает достижение"
+    game_line = _game_line(title, achievement.platform)
+    text = f"{header}\n{game_line}\n{_rarity_line(achievement)}"
     if achievement.description:
         description = _spoiler(html_escape(achievement.description), secret=achievement.is_secret)
         text += f"\n\n{description}"
     return text
 
 
+def _group_by_title(
+    achievements: list[AchievementRow],
+) -> dict[tuple[str, str], list[AchievementRow]]:
+    """Keyed on (platform, title_id), not title_id alone — Xbox's and
+    Steam's own id spaces (title_id vs. appid) don't promise to avoid each
+    other. In practice every publish() call is already scoped to one game
+    on one platform (poller/fetcher.py, poller/steam_fetcher.py each poll
+    one title at a time) — this grouping exists so the digest renders
+    correctly if that ever stops being true, not because it commonly sees
+    more than one group today.
+    """
+    groups: dict[tuple[str, str], list[AchievementRow]] = {}
+    for item in achievements:
+        groups.setdefault((item.platform, item.title_id), []).append(item)
+    return groups
+
+
 def format_digest(gamertag: str, title_name: str | None, achievements: list[AchievementRow]) -> str:
-    title = title_name or next(
-        (a.title_name for a in achievements if a.title_name), "неизвестная игра"
-    )
-    total_score = sum(a.gamerscore for a in achievements)
-    header = (
-        f"🎮 {html_escape(gamertag)}, {html_escape(title)} — "
-        f"{plural_achievements(len(achievements))} за сессию (+{total_score} G)"
-    )
-
-    lines = [header, ""]
-    for achievement in achievements[:DIGEST_PREVIEW]:
-        badge = rarity_badge(achievement.rarity_percent) or "·"
-        tail = platform_note(achievement.platform, achievement.rarity_percent)
-        name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
-        lines.append(f"{badge} {name} · {achievement.gamerscore} G{tail}")
-
-    remaining = len(achievements) - DIGEST_PREVIEW
-    if remaining > 0:
-        lines.append(f"… и ещё {remaining}")
+    """Standardized form (2026-09-05 follow-up): one block per game, each
+    shaped like format_single's own game+rarity lines — a digest reader who
+    already knows the single-achievement layout should recognise this one.
+    No total gamerscore in the header any more (same reasoning as
+    _rarity_line dropping platform-specific "no G" rules): it used to add
+    up to a real "+0 G" for an all-Steam session, which is exactly the kind
+    of technically-true-but-misleading number the rest of this rework is
+    getting rid of.
+    """
+    header = f"<b>{html_escape(gamertag)}</b> получает {plural_achievements(len(achievements))}"
+    lines = [header]
+    for index, group in enumerate(_group_by_title(achievements).values()):
+        if index > 0:
+            lines.append("")  # a blank line between one game's block and the next
+        title = group[0].title_name or title_name or "неизвестная игра"
+        lines.append(_game_line(title, group[0].platform))
+        lines.extend(_rarity_line(item) for item in group[:DIGEST_PREVIEW])
+        remaining = len(group) - DIGEST_PREVIEW
+        if remaining > 0:
+            lines.append(f"… и ещё {remaining}")
     return "\n".join(lines)
 
 

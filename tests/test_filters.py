@@ -5,12 +5,7 @@ from __future__ import annotations
 import pytest
 
 from bot.db.repo import AchievementRow, ChatTarget
-from bot.services.achievements import (
-    format_digest,
-    format_single,
-    passes_filters,
-    platform_note,
-)
+from bot.services.achievements import format_digest, format_single, passes_filters
 
 
 def achievement(
@@ -100,26 +95,39 @@ def test_min_gamerscore_and_mute() -> None:
     assert passes_filters(achievement(), chat(muted=["1"]), 10.0) is False
 
 
-def test_single_message_mentions_rarity_and_badge() -> None:
+def test_single_message_is_the_standardized_form() -> None:
+    """2026-09-05 follow-up: fixed wording on every platform, platform
+    moved off the header onto the game-title line, badge leads the name
+    rather than trailing the percentage."""
     text = format_single("Igor", achievement(rarity=2.4), "Halo Infinite")
-    assert "Igor получает достижение 🟢 Xbox" in text
-    assert "Halo Infinite · «Ashes to Ashes» · 20 G · редкость 2.4% 💎" in text
+    assert "<b>Igor</b> получает достижение" in text
+    assert "Halo Infinite (<i>🟢 Xbox</i>)" in text
+    assert "💎 «Ashes to Ashes» · 20 G · редкость 2.4%" in text
 
 
-def test_single_message_for_x360_says_so_instead_of_rarity() -> None:
+def test_single_message_for_x360_has_no_rarity_segment() -> None:
     text = format_single("Igor", achievement(rarity=None, platform="x360"), "Halo 3")
-    assert "Igor получает достижение 🟢 Xbox 360" in text
-    assert "Halo 3 · «Ashes to Ashes» · 20 G" in text
+    assert "Halo 3 (<i>🟢 Xbox 360</i>)" in text
+    assert "«Ashes to Ashes» · 20 G" in text
     assert "редкость" not in text
 
 
-def test_single_message_omits_gamerscore_for_steam() -> None:
-    """Steam has no gamerscore at all — always parsed as 0
-    (services/steam/achievements.py) — "0 G" would read as a real score,
-    not "not applicable" (SPEC 9, M-Steam-2e)."""
+def test_single_message_omits_gamerscore_when_zero() -> None:
+    """Not a Steam-specific rule any more (2026-09-05 follow-up) — any
+    platform's 0 gamerscore is omitted the same way, since "0 G" always
+    reads as a real (if trivial) score rather than "not applicable"."""
     item = achievement(rarity=92.2, platform="steam", gamerscore=0)
     text = format_single("Igor", item, "Deadlock")
-    assert "G" not in text.split("\n")[1]
+    assert "G" not in text.split("\n")[2]
+    assert "редкость 92.2%" in text
+
+
+def test_single_message_shows_gamerscore_when_nonzero_on_any_platform() -> None:
+    """The omission is about the value, not the platform — a platform that
+    usually has none still shows it if this one row genuinely has some."""
+    item = achievement(rarity=50.0, platform="steam", gamerscore=15)
+    text = format_single("Igor", item, "Deadlock")
+    assert "15 G" in text
 
 
 def test_single_message_tags_the_platform() -> None:
@@ -129,11 +137,39 @@ def test_single_message_tags_the_platform() -> None:
     assert "⚫ Steam" in text
 
 
-def test_digest_counts_and_trims() -> None:
+def test_digest_header_has_no_gamerscore_total() -> None:
+    """Used to add up gamerscore across all achievements in the header —
+    for an all-Steam session that came out as a lying "+0 G" (2026-09-05
+    follow-up, same reasoning as the single message's gamerscore rule)."""
     items = [achievement(rarity=r) for r in (2.4, 11.0, 34.0, 50.0, 60.0)]
     text = format_digest("Igor", "Halo Infinite", items)
-    assert "5 ачивок за сессию (+100 G)" in text
+    assert "<b>Igor</b> получает 5 ачивок" in text
+    assert "G" not in text.split("\n")[0]
+
+
+def test_digest_trims_a_long_list_within_one_game() -> None:
+    items = [achievement(rarity=r) for r in (2.4, 11.0, 34.0, 50.0, 60.0)]
+    text = format_digest("Igor", "Halo Infinite", items)
     assert "… и ещё 2" in text
+
+
+def test_digest_groups_achievements_by_game() -> None:
+    """2026-09-05 follow-up: one block per game, not one flat list —
+    publish() only ever hands over one game's worth today, but the
+    renderer itself must not assume that stays true forever."""
+    halo = achievement(rarity=2.4, platform="modern")
+    halo.title_id = "1"
+    forza = achievement(rarity=50.0, platform="modern")
+    forza.title_id = "2"
+    forza.title_name = "Forza Horizon 5"
+    forza.name = "Speed Demon"
+
+    text = format_digest("Igor", None, [halo, forza])
+
+    assert "<b>Igor</b> получает 2 ачивки" in text
+    halo_at = text.index("Halo Infinite")
+    forza_at = text.index("Forza Horizon 5")
+    assert halo_at < text.index("Ashes to Ashes") < forza_at < text.index("Speed Demon")
 
 
 def test_secret_achievement_name_and_description_are_spoilered() -> None:
@@ -152,8 +188,8 @@ def test_non_secret_achievement_has_no_spoiler_markup() -> None:
 def test_secret_achievement_name_is_spoilered_in_a_digest_line_too() -> None:
     items = [achievement(is_secret=True), achievement(is_secret=False)]
     text = format_digest("Igor", "Halo Infinite", items)
-    assert '<span class="tg-spoiler">Ashes to Ashes</span>' in text
-    assert "· Ashes to Ashes ·" in text  # the non-secret one, unwrapped
+    assert '«<span class="tg-spoiler">Ashes to Ashes</span>»' in text
+    assert "«Ashes to Ashes» ·" in text  # the non-secret one, unwrapped
 
 
 def test_gamertag_and_achievement_text_are_html_escaped() -> None:
@@ -165,11 +201,3 @@ def test_gamertag_and_achievement_text_are_html_escaped() -> None:
     text = format_single("We>ird<Name", weird, "Hal&o")
     assert "<C>" not in text
     assert "&amp;" in text and "&lt;" in text
-
-
-def test_platform_note_keys_on_platform_not_missing_rarity() -> None:
-    """Backfilled rows come from contract 2, which carries no rarity — a modern
-    game must not be labelled "Xbox 360" because of that."""
-    assert platform_note("x360", None) == " · Xbox 360"
-    assert platform_note("modern", 2.4) == " · 2.4%"
-    assert platform_note("modern", None) == ""

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.types import InputMediaPhoto
 
 from bot.db.repo import AchievementRow, Repo
 from bot.services.achievements import format_digest, format_single, passes_filters
@@ -22,16 +23,24 @@ log = logging.getLogger(__name__)
 
 SEND_INTERVAL_SECONDS = 3.0  # ~20 messages a minute
 
+# Telegram's own cap on one media group (sendMediaGroup) — a digest with more
+# achievements than this still lists every one of them in the text (SPEC
+# 7.2), the gallery is just illustrative, not required to be exhaustive.
+MEDIA_GROUP_MAX = 10
+
 
 @dataclass(slots=True)
 class PublishJob:
     chat_id: int
     xuid: str
     text: str
-    photo_url: str | None
-    # Only meaningful with photo_url set — a secret achievement's icon
-    # (SPEC 5.5, 7.1) can be as much of a spoiler as its name.
-    photo_has_spoiler: bool = False
+    # (icon_url, is_secret) per achievement, in order — a single achievement
+    # is just a one-item gallery here, not a separate field any more
+    # (2026-09-05 follow-up, SPEC 7.1/7.2): one delivery path for both
+    # instead of two that used to duplicate each other's fallback-to-text
+    # handling. Rows with no icon at all are dropped before this point, not
+    # here — an empty list means "no photo, plain text".
+    gallery: list[tuple[str, bool]] = field(default_factory=list)
     items: list[tuple[str, str]] = field(default_factory=list)  # (title_id, achievement_id)
 
 
@@ -85,7 +94,7 @@ class Publisher:
                         chat_id=chat.chat_id,
                         xuid=xuid,
                         text=format_digest(gamertag, title_name, allowed),
-                        photo_url=None,
+                        gallery=[(a.icon_url, a.is_secret) for a in allowed if a.icon_url],
                         items=[(a.title_id, a.achievement_id) for a in allowed],
                     )
                 )
@@ -101,8 +110,7 @@ class Publisher:
                         chat_id=chat.chat_id,
                         xuid=xuid,
                         text=format_single(gamertag, item, title_name),
-                        photo_url=item.icon_url,
-                        photo_has_spoiler=item.is_secret,
+                        gallery=[(item.icon_url, item.is_secret)] if item.icon_url else [],
                         items=[(item.title_id, item.achievement_id)],
                     )
                 )
@@ -137,20 +145,39 @@ class Publisher:
             )
 
     async def _deliver(self, job: PublishJob) -> int | None:
-        if job.photo_url:
+        # The achievement matters more than the picture(s) (SPEC 7.1) — any
+        # failure below falls through to plain text rather than losing the
+        # achievement, same principle at every step: gallery, then a single
+        # photo, then text.
+        if len(job.gallery) >= 2:
+            try:
+                media = [
+                    InputMediaPhoto(
+                        media=url,
+                        has_spoiler=secret,
+                        caption=job.text if index == 0 else None,
+                        parse_mode=ParseMode.HTML if index == 0 else None,
+                    )
+                    for index, (url, secret) in enumerate(job.gallery[:MEDIA_GROUP_MAX])
+                ]
+                messages = await self._bot.send_media_group(job.chat_id, media)
+                return messages[0].message_id if messages else None
+            except (TelegramForbiddenError, TelegramRetryAfter):
+                raise
+            except Exception:
+                log.info("gallery for chat %s did not go through, sending text", job.chat_id)
+        elif len(job.gallery) == 1:
+            url, secret = job.gallery[0]
             try:
                 message = await self._bot.send_photo(
-                    job.chat_id,
-                    photo=job.photo_url,
-                    caption=job.text,
-                    parse_mode=ParseMode.HTML,
-                    has_spoiler=job.photo_has_spoiler,
+                    job.chat_id, photo=url, caption=job.text,
+                    parse_mode=ParseMode.HTML, has_spoiler=secret,
                 )
                 return message.message_id
             except (TelegramForbiddenError, TelegramRetryAfter):
                 raise
             except Exception:
-                # The achievement matters more than the picture (SPEC 7.1).
                 log.info("icon for chat %s did not go through, sending text", job.chat_id)
+
         message = await self._bot.send_message(job.chat_id, job.text, parse_mode=ParseMode.HTML)
         return message.message_id
