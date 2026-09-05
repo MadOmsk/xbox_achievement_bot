@@ -9,11 +9,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from aiogram import F
 from pydantic import SecretStr
 
 from bot.config import Settings
 from bot.db.repo import Repo
-from bot.handlers.steam import AwaitingSteamLink, _awaiting_link, prompt_for_link
+from bot.handlers.steam import (
+    _STEAM_LINK_PATTERN,
+    AwaitingSteamLink,
+    _awaiting_link,
+    prompt_for_link,
+)
 
 TG_ID = 42
 
@@ -52,6 +58,18 @@ async def test_awaiting_filter_is_true_once_armed() -> None:
 async def test_awaiting_filter_is_false_with_no_user_at_all() -> None:
     # Defensive: some update types (e.g. a channel post) carry no from_user.
     assert await AwaitingSteamLink()(_event(None)) is False
+
+
+def test_steam_link_pattern_matches_a_real_url_with_scheme() -> None:
+    """Found live: the router's filter uses F.text.regexp's default MATCH
+    mode, which is re.match — anchored at position 0 only. A pasted link
+    always starts with "https://", so the pattern (which has no leading
+    wildcard) never matched a single real link; only a bare
+    "steamcommunity.com/..." with the scheme stripped off would have. Must
+    use mode="search", exactly as steam.py's router registration does."""
+    magic = F.text.regexp(_STEAM_LINK_PATTERN, mode="search")
+    event = SimpleNamespace(text="https://steamcommunity.com/id/oiwio")
+    assert magic.resolve(event)
 
 
 async def test_prompt_replies_not_configured_without_arming(

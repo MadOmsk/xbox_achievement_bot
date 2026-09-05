@@ -177,7 +177,9 @@ async def steam_link_provided(
     )
 
 
-@router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(_STEAM_LINK_PATTERN))
+@router.message(
+    F.chat.type == ChatType.PRIVATE, F.text.regexp(_STEAM_LINK_PATTERN, mode="search")
+)
 async def steam_link_spotted(message: Message) -> None:
     """Found live: someone pasted a steamcommunity.com link with no prior
     command at all. Registered after steam_link_provided above, so anyone
