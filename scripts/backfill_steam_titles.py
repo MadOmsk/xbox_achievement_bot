@@ -35,6 +35,13 @@ from bot.db.repo import Database, Repo
 from bot.services.steam.client import SteamApiError, get_owned_games
 
 logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)-7s %(message)s")
+# httpx logs "HTTP Request: GET <full url> ..." at INFO for every call, and
+# GetOwnedGames' own URL carries the Steam API key as a plain query param —
+# found live running this script for real: the key printed straight to the
+# terminal. main.py already does this same suppression for the exact same
+# reason (M-Steam-1); this script needs it independently, its own
+# basicConfig is a separate logging setup that doesn't inherit main.py's.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("backfill_steam_titles")
 
 
