@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from bot.db.repo import RecentAchievement
+from bot.db.repo import AchievementRow, RecentAchievement, Repo
 from bot.handlers.chat import _recent_list, _recent_row
+
+CHAT_ID = -100777
 
 
 def row(
@@ -69,3 +71,43 @@ def test_recent_list_is_a_collapsible_blockquote() -> None:
     assert text.startswith("<blockquote expandable>")
     assert text.endswith("</blockquote>")
     assert "Igor" in text and "Alex" in text
+
+
+async def test_chat_recent_includes_a_steam_only_person(repo: Repo) -> None:
+    """Found live: chat_recent()'s own JOIN was keyed on `xuid`, which is
+    Xbox-only on `users` — a Steam-only person (no xuid at all) never
+    matched, and even a person with both platforms only ever saw their
+    Xbox rows. Fixed to join on tg_id, the column seen_achievements always
+    carries regardless of platform (SPEC 9, M-Steam-2a)."""
+    await repo.upsert_chat(CHAT_ID, "Чат", 1)
+    await repo.ensure_user(1, "steamonly")
+    await repo.link_platform_account(1, "steam", "76561197960287930", "SteamOnly")
+    await repo.subscribe(CHAT_ID, 1)
+    await repo.insert_new_achievements_steam(
+        1,
+        "76561197960287930",
+        [
+            AchievementRow(
+                title_id="550",
+                achievement_id="a1",
+                name="Boomer",
+                description=None,
+                icon_url=None,
+                unlocked_at="2026-09-05T00:00:00+00:00",
+                gamerscore=0,
+                rarity_percent=10.0,
+                platform="steam",
+                title_name="Left 4 Dead 2",
+            )
+        ],
+        is_backfill=False,
+    )
+
+    rows = await repo.chat_recent(CHAT_ID, 10)
+
+    assert len(rows) == 1
+    assert rows[0].name == "Boomer"
+    # Also covers insert_new_achievements_steam's own titles-cache fix
+    # (was never populated for Steam at all, unlike Xbox's ensure_title_name)
+    # — without it this would render "без названия" instead of a real name.
+    assert rows[0].game == "Left 4 Dead 2"

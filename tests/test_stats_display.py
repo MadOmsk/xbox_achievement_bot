@@ -127,6 +127,42 @@ async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:
     assert text.count("без названия") == 2
 
 
+async def test_games_list_includes_steam_games(repo: Repo) -> None:
+    """Found live: the games table used to be `if target.xuid:` only (SPEC
+    9, M-Steam-2c's own scoping note) — recent_games() itself was never
+    Xbox-specific, just never called for a Steam link. Now merged into one
+    combined ranked list, same "one number, not one per platform" spirit
+    as the counters above."""
+    await repo.ensure_user(1, "someone")
+    await repo.link_platform_account(1, "steam", "76561197960287930", "SteamPerson")
+    await repo.insert_new_achievements_steam(
+        1,
+        "76561197960287930",
+        [
+            AchievementRow(
+                title_id="550",
+                achievement_id="a1",
+                name="A",
+                description=None,
+                icon_url=None,
+                unlocked_at=utcnow().isoformat(timespec="seconds"),
+                gamerscore=0,
+                rarity_percent=50.0,
+                platform="steam",
+                title_name="Left 4 Dead 2",
+            )
+        ],
+        is_backfill=False,
+    )
+
+    user = await repo.get_user(1)
+    assert user is not None
+    text = await _build_stats_text(repo, user)
+
+    assert text is not None
+    assert "Left 4 Dead 2" in text
+
+
 async def test_zero_limit_shows_every_game_uncapped(repo: Repo) -> None:
     """0 means "no cap" (SPEC 6.4) — the whole point of dropping the old
     fixed-height table for a collapsible quote."""

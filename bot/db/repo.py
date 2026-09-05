@@ -237,6 +237,7 @@ class TopGame:
     name: str | None
     gamerscore: int | None
     unlocked: int | None
+    platform: str | None = None
 
 
 @dataclass(slots=True)
@@ -795,6 +796,18 @@ class Repo:
         if not achievements:
             return []
 
+        # Xbox's own fetcher caches a title's name via ensure_title_name() on
+        # every poll (poller/fetcher.py) — Steam never had an equivalent, so
+        # `titles` stayed empty for every appid and /recent's LEFT JOIN onto
+        # it fell back to "без названия" for every Steam row. One upsert per
+        # unique game in this batch, not per achievement.
+        cached_titles: dict[str, str] = {}
+        for item in achievements:
+            if item.title_name and item.title_id not in cached_titles:
+                cached_titles[item.title_id] = item.title_name
+        for title_id, name in cached_titles.items():
+            await self.upsert_title(title_id, name, "steam")
+
         new_rows: list[AchievementRow] = []
         now = utcnow_iso()
         for item in achievements:
@@ -1350,7 +1363,11 @@ class Repo:
             "       s.platform, s.unlocked_at, s.is_secret "
             "FROM subscriptions sub "
             "JOIN users u ON u.tg_id = sub.tg_id "
-            "JOIN seen_achievements s ON s.xuid = u.xuid "
+            # tg_id, not xuid (SPEC 9, M-Steam-2a): xuid is Xbox-only on
+            # `users`, always NULL for a Steam-only person and never the
+            # SteamID64 `seen_achievements.xuid` holds for a Steam row even
+            # for someone with both platforms — this join saw Xbox rows only.
+            "JOIN seen_achievements s ON s.tg_id = u.tg_id "
             "LEFT JOIN titles t ON t.title_id = s.title_id "
             "WHERE sub.chat_id = ? AND u.is_excluded = 0 AND s.unlocked_at IS NOT NULL "
             "ORDER BY s.unlocked_at DESC LIMIT ?",
@@ -1370,24 +1387,40 @@ class Repo:
             for row in await cursor.fetchall()
         ]
 
-    async def recent_games(self, xuid: str, since: datetime, limit: int = 15) -> list[TopGame]:
+    async def recent_games(
+        self, external_id: str, since: datetime, limit: int = 15
+    ) -> list[TopGame]:
         """Games actually played recently, not the biggest lifetime scores —
         a person's five favourite old games would otherwise crowd out
         whatever they are playing this month, every time.
+
+        `external_id` despite the historical name isn't Xbox-specific:
+        `seen_achievements.xuid` is the generic per-platform external id
+        (SPEC 9, M-Steam-2a) — a SteamID64 works here exactly as well as an
+        xuid, already scoped to that one account's own rows.
 
         `limit == 0` means "no cap" (admin-configurable, SPEC 6.4) — passed
         to SQLite as -1, its own documented spelling of "unbounded LIMIT",
         rather than branching the query string for one case.
         """
         cursor = await self._conn.execute(
-            "SELECT t.name, COALESCE(SUM(s.gamerscore), 0) AS score, COUNT(*) AS unlocked "
+            "SELECT t.name, COALESCE(SUM(s.gamerscore), 0) AS score, COUNT(*) AS unlocked,"
+            " MAX(s.platform) AS platform "
             "FROM seen_achievements s LEFT JOIN titles t ON t.title_id = s.title_id "
             "WHERE s.xuid = ? AND s.unlocked_at >= ? "
-            "GROUP BY s.title_id ORDER BY score DESC LIMIT ?",
-            (xuid, _iso(since), limit or -1),
+            # Score ties on every Steam game (no gamerscore there at all) —
+            # unlocked count as the tiebreaker instead of SQLite's undefined
+            # order among equal scores.
+            "GROUP BY s.title_id ORDER BY score DESC, unlocked DESC LIMIT ?",
+            (external_id, _iso(since), limit or -1),
         )
         return [
-            TopGame(name=row["name"], gamerscore=row["score"], unlocked=row["unlocked"])
+            TopGame(
+                name=row["name"],
+                gamerscore=row["score"],
+                unlocked=row["unlocked"],
+                platform=row["platform"],
+            )
             for row in await cursor.fetchall()
         ]
 

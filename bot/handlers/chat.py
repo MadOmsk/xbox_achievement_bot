@@ -182,7 +182,8 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
 
 def _games_list(games: list[TopGame]) -> str:
     rows = [
-        f"{place}. {html_escape(truncate_name(game.name or 'без названия'))} — "
+        f"{place}. {_PLATFORM_ICON.get(game.platform, '')} "
+        f"{html_escape(truncate_name(game.name or 'без названия'))} — "
         f"{game.unlocked or 0} ач. (+{thousands(game.gamerscore or 0)} G)"
         for place, game in enumerate(games, start=1)
     ]
@@ -247,15 +248,26 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
         # date-bounded one can — better absent than quietly wrong (SPEC 5.4).
     ]
 
-    # Xbox-only for now (SPEC 9, M-Steam-2c's own scoping note) — a Steam
-    # recently-played source doesn't exist yet, so this stays exactly what
-    # it was rather than silently showing an incomplete cross-platform list.
-    if target.xuid:
+    # Found live, long-standing gap: this used to be Xbox-only (SPEC 9,
+    # M-Steam-2c scoped it out for lack of a Steam recently-played source —
+    # recent_games() itself was never Xbox-specific, just never called for
+    # anything else). One combined ranked list, not a section per platform —
+    # same "one number, not one per platform" spirit as the counters above.
+    external_ids = [target.xuid] if target.xuid else []
+    external_ids += [link.external_id for link in platform_links]
+    if external_ids:
         # 0 = no cap (SPEC 6.4) — the list lives in a collapsible quote
         # either way, no separate "показать все игры" tap needed any more.
         limit = await _stats_games_limit(repo)
         since = utcnow() - timedelta(days=RECENT_GAMES_DAYS)
-        games = await repo.recent_games(target.xuid, since, limit=limit)
+        per_source = await asyncio.gather(
+            *(repo.recent_games(external_id, since, limit=limit) for external_id in external_ids)
+        )
+        games = sorted(
+            (game for source in per_source for game in source),
+            key=lambda g: (g.gamerscore or 0, g.unlocked or 0),
+            reverse=True,
+        )[: limit or None]
         if games:
             lines += ["", f"<b>Игры за {RECENT_GAMES_DAYS} дней</b>", _games_list(games)]
     return "\n".join(lines)
@@ -347,7 +359,18 @@ async def who(message: Message, repo: Repo) -> None:
             text=row.gamertag or f"id{row.tg_id}", callback_data=f"who:stats:{row.tg_id}"
         )
     builder.adjust(3)
+    # Found live: no way out except picking someone, and the prompt itself
+    # never went away after a pick — just sat there stale.
+    builder.row(InlineKeyboardButton(text="Отмена", callback_data="who:cancel"))
     await message.answer("Чья статистика интересует?", reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "who:cancel")
+async def who_cancel(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.delete()
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("who:stats:"))
@@ -360,8 +383,13 @@ async def who_stats_button(callback: CallbackQuery, repo: Repo) -> None:
         return
     text = await _build_stats_text(repo, target)
     await callback.answer()
-    if text is not None and isinstance(callback.message, Message):
-        await callback.message.answer(text, parse_mode=ParseMode.HTML)
+    if isinstance(callback.message, Message):
+        if text is not None:
+            await callback.message.answer(text, parse_mode=ParseMode.HTML)
+        # The picker's own job is done either way — drop it instead of
+        # leaving a stale "Чья статистика интересует?" behind.
+        with contextlib.suppress(Exception):
+            await callback.message.delete()
 
 
 # ------------------------------------------------------------------- summary
