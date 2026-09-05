@@ -59,7 +59,7 @@ DIGEST_CHOICES = (2, 3, 4, 5, 6, 8, 10, DIGEST_NEVER)
 
 
 def format_digest(threshold: int) -> str:
-    return "никогда" if threshold >= DIGEST_NEVER else f"от {threshold} ачивок"
+    return "никогда" if threshold >= DIGEST_NEVER else f"от {threshold} достижений"
 
 
 # One mode governs every connected platform at once within a given chat

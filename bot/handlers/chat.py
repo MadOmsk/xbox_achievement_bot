@@ -144,7 +144,9 @@ async def unsubscribe(message: Message, repo: Repo) -> None:
             [InlineKeyboardButton(text="Отмена", callback_data="unsub:no")],
         ]
     )
-    await message.answer("Перестать публиковать твои ачивки в этом чате?", reply_markup=keyboard)
+    await message.answer(
+        "Перестать публиковать твои достижения в этом чате?", reply_markup=keyboard
+    )
 
 
 @router.callback_query(F.data == "unsub:no")
@@ -171,7 +173,7 @@ async def unsubscribe_confirm(callback: CallbackQuery, repo: Repo) -> None:
         return
     async with _subscription_lock(callback.message.chat.id, tg_id):
         await repo.unsubscribe(callback.message.chat.id, tg_id)
-    await callback.message.edit_text("Больше не публикую твои ачивки в этом чате.")
+    await callback.message.edit_text("Больше не публикую твои достижения в этом чате.")
     await callback.answer()
 
 
@@ -445,7 +447,7 @@ async def recent(message: Message, repo: Repo, command: CommandObject) -> None:
     if not rows:
         await message.answer("Пока пусто.")
         return
-    text = "🕘 <b>Последние ачивки</b>\n" + _recent_list(rows)
+    text = "🕘 <b>Последние достижения</b>\n" + _recent_list(rows)
     await message.answer(text, parse_mode=ParseMode.HTML)
 
 
@@ -498,19 +500,19 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
 # Most-used first, subscribe/unsubscribe at the end — those are one-time
 # setup, not something read every time (SPEC 6.3).
 HELP_TEXT = (
-    "🎮 Слежу за ачивками тех, кто играет на Xbox, и публикую их сюда — "
+    "🎮 Слежу за достижениями тех, кто играет на Xbox, и публикую их сюда — "
     "с фильтром по редкости, статистикой каждого и итогом дня.\n\n"
     "Первый раз здесь — жми «Подключить Xbox» (или Steam — тоже умею).\n"
-    "Уже подключён, но ачивок не видно — жми «Публиковать мои ачивки».\n"
+    "Уже подключён, но достижений не видно — жми «Публиковать мои достижения».\n"
     "Что-то не работает — попробуй подключиться заново.\n\n"
     "Команды чата:\n"
     "/stats [@кто] — статистика игрока\n"
     "/online — кто сейчас в игре\n"
     "/who — узнать стату конкретного игрока\n"
-    "/recent [N] — последние ачивки чата\n"
+    "/recent [N] — последние достижения чата\n"
     "/summary — сводка за сутки и за месяц\n"
     "/hltb — сколько идти игру (HowLongToBeat)\n\n"
-    "/subscribe — публиковать мои ачивки здесь\n"
+    "/subscribe — публиковать мои достижения здесь\n"
     "/unsubscribe — перестать\n\n"
     "Подключить Steam — /connect_steam <ссылка на профиль>.\n"
     "Настройки — в личке: редкость, часовой пояс."
@@ -525,13 +527,13 @@ def hub_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup:
     it is still the same "connect" step, just a second platform for it.
 
     Buttons act on whoever presses them — that is why "Публиковать мои
-    ачивки" is allowed here at all: SPEC 6.3 forbids rendering *someone
+    достижения" is allowed here at all: SPEC 6.3 forbids rendering *someone
     else's* settings where any member could page through them, not a button
     that only ever touches the presser's own subscription.
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Публиковать мои ачивки", callback_data="sub:on")],
+            [InlineKeyboardButton(text="✅ Публиковать мои достижения", callback_data="sub:on")],
             [
                 InlineKeyboardButton(
                     text="🔗 Подключить Xbox",
@@ -614,7 +616,7 @@ async def subscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> Non
             await callback.answer("Ты уже публикуешься здесь.")
             return
         await repo.subscribe(message.chat.id, callback.from_user.id)
-    await callback.answer("Готово, твои ачивки будут прилетать сюда.")
+    await callback.answer("Готово, твои достижения будут прилетать сюда.")
     await _refresh_hub(message, repo, bot)
 
 

@@ -174,7 +174,7 @@ class Fetcher:
 
         where = snapshot.title_name or snapshot.title_id or "без игры"
         state = f"в сети, {where}" if snapshot.state == "Online" else "не в сети"
-        return f"Обновлено: {state}; новых ачивок {published}."
+        return f"Обновлено: {state}; новых достижений {published}."
 
     async def refresh_title_history(self, tg_id: int, xuid: str) -> None:
         """Source of /stats, /top and of the gamerscore in the panel (SPEC 5.4)."""

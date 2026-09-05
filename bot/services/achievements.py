@@ -10,19 +10,18 @@ from html import escape as html_escape
 from bot.db.repo import AchievementRow, ChatTarget
 from bot.util import thousands
 
-DIAMOND_MAX_PERCENT = 5.0
-STAR_MAX_PERCENT = 15.0
-DIGEST_PREVIEW = 3
+#  Two badges, not three (2026-09-05 terminology/style pass) — a diamond
+#  for "редкая" (rare), a cup for "обычная" (common), nothing at all when
+#  there's no rarity_percent to judge by in the first place (Xbox 360):
+#  absence of data is not the same claim as "common", so it stays silent
+#  rather than defaulting to the cup.
+RARE_BADGE_MAX_PERCENT = 15.0
 
 
 def rarity_badge(rarity_percent: float | None) -> str:
     if rarity_percent is None:
         return ""
-    if rarity_percent <= DIAMOND_MAX_PERCENT:
-        return "💎"
-    if rarity_percent <= STAR_MAX_PERCENT:
-        return "⭐"
-    return ""
+    return "💎" if rarity_percent <= RARE_BADGE_MAX_PERCENT else "🏆"
 
 
 # Same palette as /stats' and /online's platform circles (handlers/chat.py)
@@ -142,7 +141,7 @@ def format_single(gamertag: str, achievement: AchievementRow, title_name: str | 
     title = title_name or achievement.title_name or "неизвестная игра"
     header = f"<b>{html_escape(gamertag)}</b> получает достижение"
     game_line = _game_line(title, achievement.platform)
-    text = f"{header}\n{game_line}\n{_rarity_line(achievement)}"
+    text = f"{header}\n\n{game_line}\n{_rarity_line(achievement)}"
     if achievement.description:
         description = _spoiler(html_escape(achievement.description), secret=achievement.is_secret)
         text += f"\n\n{description}"
@@ -175,27 +174,32 @@ def format_digest(gamertag: str, title_name: str | None, achievements: list[Achi
     up to a real "+0 G" for an all-Steam session, which is exactly the kind
     of technically-true-but-misleading number the rest of this rework is
     getting rid of.
+
+    Every achievement gets its own line, no "… и ещё N" cutoff (2026-09-05:
+    dropped on request — a digest exists to say what happened, trimming it
+    defeats that).
     """
     header = f"<b>{html_escape(gamertag)}</b> получает {plural_achievements(len(achievements))}"
-    lines = [header]
+    lines = [header, ""]
     for index, group in enumerate(_group_by_title(achievements).values()):
         if index > 0:
             lines.append("")  # a blank line between one game's block and the next
         title = group[0].title_name or title_name or "неизвестная игра"
         lines.append(_game_line(title, group[0].platform))
-        lines.extend(_rarity_line(item) for item in group[:DIGEST_PREVIEW])
-        remaining = len(group) - DIGEST_PREVIEW
-        if remaining > 0:
-            lines.append(f"… и ещё {remaining}")
+        lines.extend(_rarity_line(item) for item in group)
     return "\n".join(lines)
 
 
 def plural_achievements(count: int) -> str:
+    """"Достижение" everywhere, not "ачивка" — the two used to appear
+    side by side across different messages (2026-09-05 terminology pass);
+    "ач." stays fine as a space-saving abbreviation where one is needed,
+    just not the full colloquial word."""
     tail = count % 10
     hundreds = count % 100
     number = thousands(count)
     if tail == 1 and hundreds != 11:
-        return f"{number} ачивка"
+        return f"{number} достижение"
     if tail in (2, 3, 4) and hundreds not in (12, 13, 14):
-        return f"{number} ачивки"
-    return f"{number} ачивок"
+        return f"{number} достижения"
+    return f"{number} достижений"

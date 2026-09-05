@@ -105,7 +105,7 @@ async def test_steam_line_shows_its_own_lifetime_achievement_count(repo: Repo) -
     assert text is not None
     steam_line = next(line for line in text.split("\n") if line.startswith("⚫"))
     assert "SteamPerson" in steam_line
-    assert "2 ачивки" in steam_line
+    assert "2 достижения" in steam_line
 
 
 async def test_games_list_is_capped_by_the_configured_limit(repo: Repo) -> None:

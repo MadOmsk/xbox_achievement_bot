@@ -32,9 +32,9 @@ log = logging.getLogger(__name__)
 router = Router(name="connect")
 
 GREETING = (
-    "Привет! Я публикую в чат ачивки Xbox — свои и других участников.\n\n"
+    "Привет! Я публикую в чат достижения Xbox — свои и других участников.\n\n"
     "Что умею:\n"
-    "• ловлю новые ачивки и пишу о них в чат;\n"
+    "• ловлю новые достижения и пишу о них в чат;\n"
     "• фильтрую по редкости, если не хочешь публиковать всё подряд;\n"
     "• веду личную статистику и итог дня.\n\n"
     "Начнём со входа через Microsoft."
@@ -120,8 +120,8 @@ async def disconnect_command(message: Message, repo: Repo) -> None:
     )
     await message.answer(
         "Отключить Xbox?\n\n"
-        "Удалю токен и подписки. Историю ачивок оставлю — она нужна статистике чата, "
-        "и при повторном входе старые ачивки не хлынут в чат заново.\n\n"
+        "Удалю токен и подписки. Историю достижений оставлю — она нужна статистике чата, "
+        "и при повторном входе старые достижения не хлынут в чат заново.\n\n"
         f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно только "
         f"самому: {REVOKE_URL}",
         reply_markup=keyboard,
@@ -166,7 +166,7 @@ async def relogin(callback: CallbackQuery, connect: ConnectService) -> None:
     url = connect.start_login(callback.from_user.id)
     if isinstance(callback.message, Message):
         await callback.message.answer(
-            "Войди заново — старые ачивки в чат не полетят, они уже отмечены как виденные.",
+            "Войди заново — старые достижения в чат не полетят, они уже отмечены как виденные.",
             reply_markup=connect_keyboard(url),
         )
     await callback.answer()
@@ -184,7 +184,7 @@ async def optout(callback: CallbackQuery, repo: Repo, notifier: AdminNotifier) -
     )
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
-            "Хорошо, больше не напоминаю. Историю ачивок сохранил — "
+            "Хорошо, больше не напоминаю. Историю достижений сохранил — "
             "вернуться можно в любой момент через /connect_xbox."
         )
     await callback.answer()

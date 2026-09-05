@@ -116,13 +116,13 @@ async def run(settings: Settings) -> None:
             log.exception("backfill for tg_id=%s failed", tg_id)
             await bot.send_message(
                 tg_id,
-                "Не смог перечитать твою историю ачивок. Публикация пока выключена, "
+                "Не смог перечитать твою историю достижений. Публикация пока выключена, "
                 "чтобы не завалить чат — напиши /connect_xbox ещё раз чуть позже.",
             )
             return
         await bot.send_message(
             tg_id,
-            f"Готово: перечитал {count} уже выбитых ачивок — в чат они не полетят. "
+            f"Готово: перечитал {count} уже выбитых достижений — в чат они не полетят. "
             "Дальше публикую только новые.",
         )
 
@@ -170,7 +170,7 @@ async def run(settings: Settings) -> None:
                 tg_id, connect_handlers.TIMEZONE_PROMPT, reply_markup=timezone_keyboard()
             )
         if is_new:
-            await bot.send_message(tg_id, "Читаю твою историю ачивок, это займёт минуту…")
+            await bot.send_message(tg_id, "Читаю твою историю достижений, это займёт минуту…")
             asyncio.create_task(backfill(tg_id, identity.xuid))  # noqa: RUF006
         else:
             # A silent background refresh would leave the panel showing a
@@ -257,10 +257,10 @@ async def _publish_command_menu(bot: Bot) -> None:
         BotCommand(command="stats", description="Статистика игрока"),
         BotCommand(command="online", description="Онлайн-статус игроков"),
         BotCommand(command="who", description="Узнать стату юзера"),
-        BotCommand(command="recent", description="Последние ачивки чата"),
+        BotCommand(command="recent", description="Последние достижения чата"),
         BotCommand(command="summary", description="Сводка за сутки и за месяц"),
         BotCommand(command="hltb", description="Сколько идти игру (HowLongToBeat)"),
-        BotCommand(command="subscribe", description="Публиковать мои ачивки здесь"),
+        BotCommand(command="subscribe", description="Публиковать мои достижения здесь"),
         BotCommand(command="unsubscribe", description="Перестать публиковать"),
         BotCommand(command="help", description="Что я умею"),
     ]

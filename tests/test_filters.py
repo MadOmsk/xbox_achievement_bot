@@ -118,7 +118,8 @@ def test_single_message_omits_gamerscore_when_zero() -> None:
     reads as a real (if trivial) score rather than "not applicable"."""
     item = achievement(rarity=92.2, platform="steam", gamerscore=0)
     text = format_single("Igor", item, "Deadlock")
-    assert "G" not in text.split("\n")[2]
+    lines = text.split("\n")
+    assert "G" not in lines[3]  # header, blank, game line, then this one
     assert "редкость 92.2%" in text
 
 
@@ -143,14 +144,17 @@ def test_digest_header_has_no_gamerscore_total() -> None:
     follow-up, same reasoning as the single message's gamerscore rule)."""
     items = [achievement(rarity=r) for r in (2.4, 11.0, 34.0, 50.0, 60.0)]
     text = format_digest("Igor", "Halo Infinite", items)
-    assert "<b>Igor</b> получает 5 ачивок" in text
+    assert "<b>Igor</b> получает 5 достижений" in text
     assert "G" not in text.split("\n")[0]
 
 
-def test_digest_trims_a_long_list_within_one_game() -> None:
+def test_digest_lists_every_achievement_no_cutoff() -> None:
+    """Dropped the old "… и ещё N" trim on request (2026-09-05) — a digest
+    exists to say what happened, cutting it short defeats that."""
     items = [achievement(rarity=r) for r in (2.4, 11.0, 34.0, 50.0, 60.0)]
     text = format_digest("Igor", "Halo Infinite", items)
-    assert "… и ещё 2" in text
+    assert "…" not in text
+    assert text.count("«Ashes to Ashes»") == 5
 
 
 def test_digest_groups_achievements_by_game() -> None:
@@ -166,7 +170,7 @@ def test_digest_groups_achievements_by_game() -> None:
 
     text = format_digest("Igor", None, [halo, forza])
 
-    assert "<b>Igor</b> получает 2 ачивки" in text
+    assert "<b>Igor</b> получает 2 достижения" in text
     halo_at = text.index("Halo Infinite")
     forza_at = text.index("Forza Horizon 5")
     assert halo_at < text.index("Ashes to Ashes") < forza_at < text.index("Speed Demon")

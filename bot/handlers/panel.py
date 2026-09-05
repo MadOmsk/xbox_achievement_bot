@@ -116,7 +116,7 @@ async def panel_sync(
         return
 
     summary = (
-        f"Проверил игр: {titles}. Новых ачивок в чат: {published}."
+        f"Проверил игр: {titles}. Новых достижений в чат: {published}."
         if titles
         else "Ничего нового — с последнего опроса ты никуда не заходил."
     )
@@ -132,7 +132,7 @@ async def panel_digest_menu(callback: CallbackQuery, repo: Repo) -> None:
         with contextlib.suppress(Exception):
             await callback.message.edit_text(
                 "Сводка вместо отдельных сообщений\n\n"
-                "Если за один раз в одной игре выбито столько ачивок или больше — "
+                "Если за один раз в одной игре выбито столько достижений или больше — "
                 "в чат уйдёт одно сводное сообщение.",
                 reply_markup=digest_keyboard(current),
             )
@@ -163,8 +163,8 @@ async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
         with contextlib.suppress(Exception):
             await callback.message.edit_text(
                 "Отключить Xbox?\n\n"
-                "Удалю токен и подписки. Историю ачивок оставлю — она нужна статистике "
-                "чата, и при повторном входе старые ачивки не хлынут в чат заново.\n\n"
+                "Удалю токен и подписки. Историю достижений оставлю — она нужна статистике "
+                "чата, и при повторном входе старые достижения не хлынут в чат заново.\n\n"
                 f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно "
                 f"только самому: {REVOKE_URL}",
                 reply_markup=disconnect_prompt_keyboard(from_panel=True),
@@ -330,7 +330,8 @@ async def panel_chat_unsub_prompt(callback: CallbackQuery, repo: Repo) -> None:
     if isinstance(callback.message, Message):
         with contextlib.suppress(Exception):
             await callback.message.edit_text(
-                f"Перестать публиковать твои ачивки в «{title}»?", reply_markup=builder.as_markup()
+                f"Перестать публиковать твои достижения в «{title}»?",
+                reply_markup=builder.as_markup(),
             )
     await callback.answer()
 
@@ -429,7 +430,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     if needs_reconnect:
         lines += ["", "Доступ к Xbox истёк — жми «Подключить заново» ниже."]
     if recent:
-        lines += ["", "Последние ачивки:"]
+        lines += ["", "Последние достижения:"]
         lines += [
             f"🏆 «{item.name}» — {item.title_name or 'неизвестная игра'}, "
             f"{humanize_ago(item.unlocked_at)}"

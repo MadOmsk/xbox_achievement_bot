@@ -149,7 +149,7 @@ async def test_month_window_is_thirty_rolling_days(repo: Repo) -> None:
     assert text is not None
     # Two total achievements (today + old) must not both land in the 30-day
     # section; only the recent one should count there.
-    assert "2 ачивки" not in text
+    assert "2 достижения" not in text
 
 
 async def test_summary_is_sent_once_per_day(repo: Repo) -> None:

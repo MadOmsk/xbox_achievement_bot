@@ -187,9 +187,9 @@ def test_help_text_explains_what_the_bot_does_and_the_three_paths() -> None:
     """SPEC 6.3: one line on what the bot is, then a branch for "first time",
     "connected but not publishing" and "something's broken" — not a two-step
     instruction that assumes only new users read it."""
-    assert "ачивк" in HELP_TEXT.split("\n\n")[0].lower()  # the "what I do" line
+    assert "достижен" in HELP_TEXT.split("\n\n")[0].lower()  # the "what I do" line
     assert "Подключить Xbox" in HELP_TEXT
-    assert "Публиковать мои ачивки" in HELP_TEXT
+    assert "Публиковать мои достижения" in HELP_TEXT
     assert "заново" in HELP_TEXT
     assert "/who" in HELP_TEXT
 

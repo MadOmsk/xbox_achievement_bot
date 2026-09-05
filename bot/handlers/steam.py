@@ -101,7 +101,7 @@ async def connect_steam(
     if not profile.is_public:
         await message.answer(
             "Профиль есть, но игровая статистика скрыта — я не смогу читать "
-            "ачивки. Сделай её публичной и попробуй снова: "
+            "достижения. Сделай её публичной и попробуй снова: "
             f"{PRIVACY_URL} → «Игровая статистика» → «Всем»."
         )
         return
@@ -118,7 +118,7 @@ async def connect_steam(
     # Run on every link, not just the first (link_platform_account already
     # replaces an existing one) — idempotent and safe, same reasoning as
     # Xbox's refresh_after_reconnect (main.py).
-    await message.answer("Читаю твою историю ачивок Steam, это может занять пару минут…")
+    await message.answer("Читаю твою историю достижений Steam, это может занять пару минут…")
     asyncio.create_task(  # noqa: RUF006
         _backfill_and_notify(bot, steam_fetcher, message.chat.id, profile.steam_id)
     )
@@ -133,12 +133,12 @@ async def _backfill_and_notify(
         log.exception("steam backfill for tg_id=%s failed", tg_id)
         await bot.send_message(
             tg_id,
-            "Не смог перечитать твою историю ачивок Steam. Публикация пока "
+            "Не смог перечитать твою историю достижений Steam. Публикация пока "
             "выключена — привяжи аккаунт заново чуть позже: /connect_steam.",
         )
         return
     await bot.send_message(
-        tg_id, f"Готово: перечитал {count} уже выбитых ачивок Steam — в чат они не полетят."
+        tg_id, f"Готово: перечитал {count} уже выбитых достижений Steam — в чат они не полетят."
     )
 
 

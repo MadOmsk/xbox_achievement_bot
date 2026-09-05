@@ -264,7 +264,8 @@ async def chat_rare_menu(callback: CallbackQuery, repo: Repo) -> None:
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data=f"a:chat:{chat_id}"))
     await _redraw(
         callback,
-        f"Порог «редкой» ачивки в «{chat.title or chat_id}»: {chat.rare_threshold_percent:g}%\n\n"
+        f"Порог «редкого» достижения в «{chat.title or chat_id}»: "
+        f"{chat.rare_threshold_percent:g}%\n\n"
         "Пришли новое значение одним числом, например 12 или 7.5 — от 0 до 100. "
         "Действует только на этот чат.",
         builder.as_markup(),
@@ -528,7 +529,7 @@ async def _home(repo: Repo, fetcher: Fetcher) -> tuple[str, InlineKeyboardMarkup
         f"Пользователей:  {len(users)} "
         f"({active} активных, {excluded} исключено, {broken} без входа)\n"
         f"Чатов:          {sum(1 for c in chats if c.is_active)}\n"
-        f"API (ачивки):   {_format_api_usage(fetcher.api_usage())}\n\n"
+        f"API (достижения): {_format_api_usage(fetcher.api_usage())}\n\n"
         "Порог редкости и время итога дня — теперь в карточке каждого "
         "чата (раздел «Чаты»), не здесь: у каждого чата своё значение."
     )
@@ -583,7 +584,7 @@ async def _users(repo: Repo, page: int) -> tuple[str, InlineKeyboardMarkup]:
         builder.row(*navigation)
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
 
-    lines += ["", "Колонки: когда был в сети · ачивок сегодня / за месяц"]
+    lines += ["", "Колонки: когда был в сети · достижений сегодня / за месяц"]
     return "\n".join(lines), builder.as_markup()
 
 
