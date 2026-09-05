@@ -500,14 +500,15 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
 # ---------------------------------------------------------------------- hub
 
 
-# Most-used first, subscribe/unsubscribe at the end — those are one-time
-# setup, not something read every time (SPEC 6.3).
+# Rewritten 2026-09-05: no connect/subscribe walkthrough in the text any
+# more — the hub's own buttons (hub_keyboard, below) already cover both,
+# intuitively enough on their own that spelling them out here was just
+# noise by comparison to what people actually come back to read: what the
+# bot is, and the commands.
 HELP_TEXT = (
-    "🎮 Слежу за достижениями тех, кто играет на XBOX, и публикую их сюда — "
-    "с фильтром по редкости, статистикой каждого и итогом дня.\n\n"
-    "Первый раз здесь — жми «Подключить XBOX» (или Steam — тоже умею).\n"
-    "Уже подключён, но достижений не видно — жми «Публиковать мои достижения».\n"
-    "Что-то не работает — попробуй подключиться заново.\n\n"
+    "🎮 Слежу за достижениями тех, кто играет на XBOX и в Steam, и "
+    "публикую их сюда — с фильтром по редкости, статистикой каждого и "
+    "итогом дня.\n\n"
     "Команды чата:\n"
     "/stats [@кто] — статистика игрока\n"
     "/online — кто сейчас в игре\n"
@@ -515,10 +516,7 @@ HELP_TEXT = (
     "/recent [N] — последние достижения чата\n"
     "/summary — сводка за сутки и за месяц\n"
     "/hltb — сколько идти игру (HowLongToBeat)\n\n"
-    "/subscribe — публиковать мои достижения здесь\n"
-    "/unsubscribe — перестать\n\n"
-    "Подключить Steam — /connect_steam в личке, дальше подскажу.\n"
-    "Настройки — в личке: редкость, часовой пояс."
+    "Настройки — в личке, /panel."
 )
 
 

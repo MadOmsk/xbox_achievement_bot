@@ -32,15 +32,21 @@ def test_not_connected_keyboard_offers_both_platforms() -> None:
     assert _callback_data(markup) == ["relogin", "steam:connect"]
 
 
-def test_not_connected_keyboard_hides_steam_button_once_connected() -> None:
+def test_not_connected_keyboard_offers_steam_disconnect_once_connected() -> None:
+    """Steam-only, no XBOX at all — still gets a real disconnect option for
+    the platform it does have, not nothing (2026-09-05 follow-up)."""
     markup = panel_keyboard(None, connected=False, steam_connected=True)
-    assert _callback_data(markup) == ["relogin"]
+    assert _callback_data(markup) == ["relogin", "steam:disconnectprompt"]
 
 
-def test_connected_keyboard_offers_steam_only_until_connected() -> None:
-    assert "steam:connect" in _callback_data(panel_keyboard(180, connected=True))
-    connected_both = panel_keyboard(180, connected=True, steam_connected=True)
-    assert "steam:connect" not in _callback_data(connected_both)
+def test_connected_keyboard_offers_steam_connect_or_disconnect_not_both() -> None:
+    connect_only = panel_keyboard(180, connected=True)
+    assert "steam:connect" in _callback_data(connect_only)
+    assert "steam:disconnectprompt" not in _callback_data(connect_only)
+
+    disconnect_only = panel_keyboard(180, connected=True, steam_connected=True)
+    assert "steam:disconnectprompt" in _callback_data(disconnect_only)
+    assert "steam:connect" not in _callback_data(disconnect_only)
 
 
 def test_needs_reconnect_adds_a_button_without_hiding_settings() -> None:

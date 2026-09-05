@@ -105,6 +105,13 @@ def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMar
 STEAM_CONNECT_BUTTON = InlineKeyboardButton(
     text="🎮 Подключить Steam", callback_data="steam:connect"
 )
+STEAM_DISCONNECT_BUTTON = InlineKeyboardButton(
+    text="🔕 Отключить Steam", callback_data="steam:disconnectprompt"
+)
+
+
+def _steam_button(*, steam_connected: bool) -> InlineKeyboardButton:
+    return STEAM_DISCONNECT_BUTTON if steam_connected else STEAM_CONNECT_BUTTON
 
 
 def panel_keyboard(
@@ -116,11 +123,15 @@ def panel_keyboard(
 ) -> InlineKeyboardMarkup:
     if not connected:
         # Xbox and Steam are independent (M-Steam-1) — someone with neither
-        # connected yet should be offered both, not just Xbox first.
-        rows = [[InlineKeyboardButton(text="🔗 Подключить XBOX", callback_data="relogin")]]
-        if not steam_connected:
-            rows.append([STEAM_CONNECT_BUTTON])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+        # connected yet should be offered both, not just Xbox first, and
+        # someone with only Steam still gets a real disconnect option for
+        # it rather than nothing at all.
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🔗 Подключить XBOX", callback_data="relogin")],
+                [_steam_button(steam_connected=steam_connected)],
+            ]
+        )
 
     rows: list[list[InlineKeyboardButton]] = []
     if needs_reconnect:
@@ -137,8 +148,13 @@ def panel_keyboard(
         [InlineKeyboardButton(text="💬 Мои чаты ▸", callback_data="panel:chatlist")],
         [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
         [InlineKeyboardButton(text="🔕 Отключить XBOX", callback_data="panel:disconnect")],
-        [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
     ]
+    # Symmetric with XBOX's own disconnect row above (2026-09-05 follow-up)
+    # — the connect button already moved up top when not connected, so the
+    # disconnect one sits down here to match.
+    if steam_connected:
+        rows.append([STEAM_DISCONNECT_BUTTON])
+    rows.append([InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

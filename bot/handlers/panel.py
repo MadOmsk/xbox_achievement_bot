@@ -161,6 +161,17 @@ async def panel_disconnect_cancel(callback: CallbackQuery, repo: Repo) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "panel:steamdisconnect:no")
+async def panel_steam_disconnect_cancel(callback: CallbackQuery, repo: Repo) -> None:
+    """Same treatment as panel_disconnect_cancel above, for Steam's own
+    disconnect button (2026-09-05 follow-up)."""
+    text, markup = await render_panel(repo, callback.from_user.id)
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(text, reply_markup=markup)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "panel:tz")
 async def panel_timezone(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):

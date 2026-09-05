@@ -183,15 +183,17 @@ async def test_online_lists_a_connected_non_publisher_who_was_seen_writing(
     assert {row.gamertag for row in rows} == {"Publisher", "Lurker"}
 
 
-def test_help_text_explains_what_the_bot_does_and_the_three_paths() -> None:
-    """SPEC 6.3: one line on what the bot is, then a branch for "first time",
-    "connected but not publishing" and "something's broken" — not a two-step
-    instruction that assumes only new users read it."""
-    assert "достижен" in HELP_TEXT.split("\n\n")[0].lower()  # the "what I do" line
-    assert "Подключить XBOX" in HELP_TEXT
-    assert "Публиковать мои достижения" in HELP_TEXT
-    assert "заново" in HELP_TEXT
-    assert "/who" in HELP_TEXT
+def test_help_text_mentions_both_platforms_and_the_main_commands() -> None:
+    """Rewritten 2026-09-05: no more connect/subscribe walkthrough in the
+    text — the hub's own buttons (hub_keyboard) already cover both,
+    intuitively enough on their own — just what the bot is and the
+    commands people actually come back to use."""
+    intro = HELP_TEXT.split("\n\n")[0].lower()
+    assert "xbox" in intro and "steam" in intro
+    for command in ("/stats", "/online", "/who", "/recent", "/summary", "/hltb"):
+        assert command in HELP_TEXT
+    assert "/subscribe" not in HELP_TEXT
+    assert "/unsubscribe" not in HELP_TEXT
 
 
 async def test_record_chat_seen_ignores_an_unknown_tg_id(repo: Repo) -> None:

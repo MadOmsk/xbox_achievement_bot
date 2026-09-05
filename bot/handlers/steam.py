@@ -303,20 +303,46 @@ async def _backfill_and_notify(
     )
 
 
+def _disconnect_prompt_keyboard(*, from_panel: bool) -> InlineKeyboardMarkup:
+    # Cancelling from the panel restores the panel in place (panel.py's own
+    # panel:steamdisconnect:no) rather than just vanishing — same treatment
+    # as XBOX's own disconnect_prompt_keyboard (keyboards.py), 2026-09-05.
+    cancel_data = "panel:steamdisconnect:no" if from_panel else "steam:disconnect:no"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, отключить", callback_data="steam:disconnect:yes")],
+            [InlineKeyboardButton(text="Отмена", callback_data=cancel_data)],
+        ]
+    )
+
+
 @router.message(Command("disconnect_steam"), F.chat.type == ChatType.PRIVATE)
 async def disconnect_steam_command(message: Message, repo: Repo) -> None:
     link = await repo.get_platform_link(message.chat.id, "steam")
     if link is None:
         await message.answer("Steam и так не подключён.")
         return
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Да, отключить", callback_data="steam:disconnect:yes")],
-            [InlineKeyboardButton(text="Отмена", callback_data="steam:disconnect:no")],
-        ]
+    await message.answer(
+        f"Отключить Steam ({link.display_name})?",
+        reply_markup=_disconnect_prompt_keyboard(from_panel=False),
     )
-    await message.answer(f"Отключить Steam ({link.display_name})?", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "steam:disconnectprompt")
+async def steam_disconnect_button(callback: CallbackQuery, repo: Repo) -> None:
+    """The panel's own "🔕 Отключить Steam" button (2026-09-05 follow-up,
+    same treatment XBOX's disconnect button already gets)."""
+    link = await repo.get_platform_link(callback.from_user.id, "steam")
+    if link is None:
+        await callback.answer("Steam и так не подключён.", show_alert=True)
+        return
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(
+                f"Отключить Steam ({link.display_name})?",
+                reply_markup=_disconnect_prompt_keyboard(from_panel=True),
+            )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "steam:disconnect:no")
