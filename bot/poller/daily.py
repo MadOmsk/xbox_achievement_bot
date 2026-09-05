@@ -18,6 +18,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.db.repo import ChatMemberStat, Repo
 from bot.services.achievements import platform_breakdown_suffix, plural_achievements
+from bot.services.message_log import stats_category
 from bot.services.stats import local_now
 from bot.services.tables import blockquote, total_line, truncate_name
 from bot.util import thousands, utcnow
@@ -78,9 +79,10 @@ class DailySummary:
             text, markup = built
 
             try:
-                await self._bot.send_message(
-                    chat.chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup
-                )
+                with stats_category():
+                    await self._bot.send_message(
+                        chat.chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup
+                    )
             except TelegramForbiddenError:
                 log.info("chat %s refused the summary, deactivating", chat.chat_id)
                 await self._repo.deactivate_chat(chat.chat_id)

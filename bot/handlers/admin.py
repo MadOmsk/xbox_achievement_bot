@@ -31,6 +31,8 @@ from bot.handlers.keyboards import (
     next_rarity_mode,
 )
 from bot.poller.fetcher import Fetcher
+from bot.poller.message_cleanup import DEFAULT_TTL_MINUTES as DEFAULT_SYSTEM_MESSAGE_TTL_MIN
+from bot.poller.message_cleanup import TTL_SETTING_KEY as SYSTEM_MESSAGE_TTL_KEY
 from bot.services.stats import counters_for, month_cutoff_utc, today_cutoff_utc
 from bot.services.tables import truncate_name
 from bot.util import humanize_ago, parse_utc_offset, utcnow
@@ -104,28 +106,37 @@ _LIMIT_LABELS = {
     "stats_games_limit": "Игр в /stats",
     "hltb_results_limit": "Результатов поиска и подсказок HLTB",
     "hltb_page_size": "Результатов на странице (HLTB)",
+    SYSTEM_MESSAGE_TTL_KEY: "Автоудаление системных сообщений (мин)",
 }
 _LIMIT_DEFAULTS = {
     "summary_top_limit": "15",
     "stats_games_limit": "15",
     "hltb_results_limit": "20",
     "hltb_page_size": "5",
+    SYSTEM_MESSAGE_TTL_KEY: str(DEFAULT_SYSTEM_MESSAGE_TTL_MIN),
 }
 # hltb_page_size feeds Telegram inline-keyboard rows directly — 50 buttons on
 # one page would be unusable, unlike the other two below (a list inside a
 # collapsible quote, SPEC 1.6, not a keyboard grid).
-_LIMIT_MAX_OVERRIDES = {"hltb_page_size": 10}
+_LIMIT_MAX_OVERRIDES = {"hltb_page_size": 10, SYSTEM_MESSAGE_TTL_KEY: 60}
 # summary_top_limit/stats_games_limit render into a <blockquote expandable>
 # now, not a fixed-width table — an "unlimited" list fits there just fine
 # (SPEC 1.6), so these two alone allow 0 for "no cap". hltb's two stay at 1:
 # a page size or a search pool of 0 is just broken, not "show everything".
-_LIMIT_MIN_OVERRIDES = {"summary_top_limit": 0, "stats_games_limit": 0}
+# system_message_ttl_min's own 0 means something else again — "off", not
+# "no cap" — see _ZERO_LABELS below.
+_LIMIT_MIN_OVERRIDES = {
+    "summary_top_limit": 0,
+    "stats_games_limit": 0,
+    SYSTEM_MESSAGE_TTL_KEY: 0,
+}
 
 UNLIMITED_LABEL = "без ограничения"
+_ZERO_LABELS = {SYSTEM_MESSAGE_TTL_KEY: "выключено"}
 
 
-def _format_limit(value: str) -> str:
-    return UNLIMITED_LABEL if value == "0" else value
+def _format_limit(key: str, value: str) -> str:
+    return _ZERO_LABELS.get(key, UNLIMITED_LABEL) if value == "0" else value
 
 
 @router.callback_query(F.data == "a:limits")
@@ -135,7 +146,7 @@ async def limits_menu(callback: CallbackQuery, repo: Repo) -> None:
         current = await repo.get_app_setting(key, _LIMIT_DEFAULTS[key])
         builder.row(
             InlineKeyboardButton(
-                text=f"{label}: {_format_limit(current)} ▸", callback_data=f"a:limit:{key}"
+                text=f"{label}: {_format_limit(key, current)} ▸", callback_data=f"a:limit:{key}"
             )
         )
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:home"))
@@ -157,12 +168,12 @@ async def limit_menu(callback: CallbackQuery, repo: Repo) -> None:
     _awaiting_input[callback.from_user.id] = (key, None)
     limit_min = _LIMIT_MIN_OVERRIDES.get(key, LIMIT_MIN)
     limit_max = _LIMIT_MAX_OVERRIDES.get(key, LIMIT_MAX)
-    zero_hint = " (0 — без ограничения)" if limit_min == 0 else ""
+    zero_hint = f" (0 — {_ZERO_LABELS.get(key, UNLIMITED_LABEL)})" if limit_min == 0 else ""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="a:limits"))
     await _redraw(
         callback,
-        f"{label}: {_format_limit(current)}\n\n"
+        f"{label}: {_format_limit(key, current)}\n\n"
         f"Пришли новое значение целым числом, от {limit_min} до {limit_max}{zero_hint}.",
         builder.as_markup(),
     )
@@ -202,7 +213,7 @@ async def numeric_setting_input(message: Message, repo: Repo, fetcher: Fetcher) 
         await message.answer(f"Число должно быть от {limit_min} до {limit_max}. Ещё раз?")
         return
     stored = str(value_int)
-    confirm = f"{_LIMIT_LABELS[key]}: {_format_limit(stored)}"
+    confirm = f"{_LIMIT_LABELS[key]}: {_format_limit(key, stored)}"
 
     del _awaiting_input[message.from_user.id]
     await repo.set_app_setting(key, stored, message.from_user.id)
@@ -509,6 +520,88 @@ async def chat_wipe_confirm(callback: CallbackQuery, repo: Repo, bot: Bot) -> No
     await _redraw(callback, *await _chat(repo, chat_id))
 
 
+# A narrower sibling of the unconditional wipe above (2026-09-05 follow-up,
+# "system message" auto-delete): these two leave published achievements,
+# stats and summaries untouched, so they're safe as a routine cleanup, not
+# just a "just in case" tool — one bounded to 24h, one with no time limit
+# at all for whenever that isn't enough.
+
+
+async def _system_wipe_prompt(
+    callback: CallbackQuery, repo: Repo, chat_id: int, ids: list[int], confirm_callback: str
+) -> None:
+    chat = await _find_chat(repo, chat_id)
+    if chat is None:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+    if not ids:
+        await callback.answer("Системных сообщений не нашёл.", show_alert=True)
+        return
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="Да, стереть", callback_data=confirm_callback))
+    builder.row(InlineKeyboardButton(text="Отмена", callback_data=f"a:chat:{chat_id}"))
+    await _redraw(
+        callback,
+        f"Стереть {len(ids)} системных сообщений в «{chat.title or chat_id}»?\n\n"
+        "Достижений, /stats, /summary и итога дня это не касается — только "
+        "промежуточные сообщения (подсказки, подтверждения, /help и т.п.).",
+        builder.as_markup(),
+    )
+
+
+async def _system_wipe_confirm(
+    callback: CallbackQuery, repo: Repo, bot: Bot, ids: list[int]
+) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+
+    ok = True
+    for start in range(0, len(ids), 100):  # Bot API caps deleteMessages at 100 ids per call
+        try:
+            await bot.delete_messages(chat_id, ids[start : start + 100])
+        except Exception:
+            log.info("system wipe failed for chat %s, chunk at %s", chat_id, start)
+            ok = False
+
+    await repo.forget_bot_messages(chat_id, ids)
+    await callback.answer("Готово." if ok else "Частично — что-то не далось стереть.")
+    await _redraw(callback, *await _chat(repo, chat_id))
+
+
+@router.callback_query(F.data.startswith("a:cswipe:"))
+async def chat_system_wipe_prompt(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    since = utcnow() - timedelta(hours=WIPE_WINDOW_HOURS)
+    ids = await repo.system_bot_messages_since(chat_id, since)
+    await _system_wipe_prompt(callback, repo, chat_id, ids, f"a:cswipey:{chat_id}")
+
+
+@router.callback_query(F.data.startswith("a:cswipey:"))
+async def chat_system_wipe_confirm(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    since = utcnow() - timedelta(hours=WIPE_WINDOW_HOURS)
+    ids = await repo.system_bot_messages_since(chat_id, since)
+    await _system_wipe_confirm(callback, repo, bot, ids)
+
+
+@router.callback_query(F.data.startswith("a:cswipeall:"))
+async def chat_system_wipe_all_prompt(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    ids = await repo.all_system_bot_messages(chat_id)
+    await _system_wipe_prompt(callback, repo, chat_id, ids, f"a:cswipeally:{chat_id}")
+
+
+@router.callback_query(F.data.startswith("a:cswipeally:"))
+async def chat_system_wipe_all_confirm(callback: CallbackQuery, repo: Repo, bot: Bot) -> None:
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    ids = await repo.all_system_bot_messages(chat_id)
+    await _system_wipe_confirm(callback, repo, bot, ids)
+
+
 # ------------------------------------------------------------------- screens
 
 
@@ -708,6 +801,16 @@ async def _chat(repo: Repo, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     builder.row(
         InlineKeyboardButton(
             text="🧹 Стереть сообщения бота (24ч)", callback_data=f"a:cwipe:{chat_id}"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🧹 Удалить системные (24ч)", callback_data=f"a:cswipe:{chat_id}"
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🧹 Удалить все системные", callback_data=f"a:cswipeall:{chat_id}"
         )
     )
     builder.row(InlineKeyboardButton(text="‹ К списку", callback_data="a:chats"))

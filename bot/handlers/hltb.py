@@ -29,6 +29,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from bot.db.repo import Repo
 from bot.services.hltb import HltbError, HltbResult, resolve, search
+from bot.services.message_log import stats_category
 
 log = logging.getLogger(__name__)
 
@@ -310,16 +311,18 @@ async def _send_card(bot: Bot, chat_id: int, message_id: int, result: HltbResult
     caption = _card(result)
     if result.image_url:
         try:
-            await bot.send_photo(
-                chat_id, photo=result.image_url, caption=caption, parse_mode=ParseMode.HTML
-            )
+            with stats_category():
+                await bot.send_photo(
+                    chat_id, photo=result.image_url, caption=caption, parse_mode=ParseMode.HTML
+                )
         except Exception:
             log.info("could not send hltb cover for id=%s, falling back to text", result.hltb_id)
         else:
             with contextlib.suppress(Exception):
                 await bot.delete_message(chat_id, message_id)
             return
-    await _edit(bot, chat_id, message_id, caption, None, html=True)
+    with stats_category():
+        await _edit(bot, chat_id, message_id, caption, None, html=True)
 
 
 def _card(result: HltbResult) -> str:

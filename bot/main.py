@@ -28,6 +28,7 @@ from bot.handlers.keyboards import timezone_keyboard
 from bot.lock import AlreadyRunningError, single_instance
 from bot.poller.daily import DailySummary
 from bot.poller.fetcher import Fetcher
+from bot.poller.message_cleanup import MessageCleanup
 from bot.poller.presence import PresencePoller
 from bot.poller.publisher import Publisher
 from bot.poller.reminders import ReminderJob
@@ -104,7 +105,13 @@ async def run(settings: Settings) -> None:
     steam_poller = SteamPresencePoller(settings, repo, steam_fetcher)
 
     scheduler = PollerScheduler(
-        poller, fetcher, ReminderJob(bot, repo), DailySummary(bot, repo), repo, steam_poller
+        poller,
+        fetcher,
+        ReminderJob(bot, repo),
+        DailySummary(bot, repo),
+        repo,
+        steam_poller,
+        MessageCleanup(bot, repo),
     )
 
     async def backfill(tg_id: int, xuid: str) -> None:

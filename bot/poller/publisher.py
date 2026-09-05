@@ -18,6 +18,7 @@ from aiogram.types import InputMediaPhoto
 
 from bot.db.repo import AchievementRow, Repo
 from bot.services.achievements import format_digest, format_single, passes_filters
+from bot.services.message_log import stats_category
 
 log = logging.getLogger(__name__)
 
@@ -169,36 +170,40 @@ class Publisher:
         # The achievement matters more than the picture(s) (SPEC 7.1) — any
         # failure below falls through to plain text rather than losing the
         # achievement, same principle at every step: gallery, then a single
-        # photo, then text.
-        if len(job.gallery) >= 2:
-            try:
-                media = [
-                    InputMediaPhoto(
-                        media=url,
-                        has_spoiler=secret,
-                        caption=job.text if index == 0 else None,
-                        parse_mode=ParseMode.HTML if index == 0 else None,
+        # photo, then text. Every branch is a "stats" result (2026-09-05
+        # follow-up) — never a candidate for message_cleanup.py's auto-delete.
+        with stats_category():
+            if len(job.gallery) >= 2:
+                try:
+                    media = [
+                        InputMediaPhoto(
+                            media=url,
+                            has_spoiler=secret,
+                            caption=job.text if index == 0 else None,
+                            parse_mode=ParseMode.HTML if index == 0 else None,
+                        )
+                        for index, (url, secret) in enumerate(job.gallery[:MEDIA_GROUP_MAX])
+                    ]
+                    messages = await self._bot.send_media_group(job.chat_id, media)
+                    return messages[0].message_id if messages else None
+                except (TelegramForbiddenError, TelegramRetryAfter):
+                    raise
+                except Exception:
+                    log.info("gallery for chat %s did not go through, sending text", job.chat_id)
+            elif len(job.gallery) == 1:
+                url, secret = job.gallery[0]
+                try:
+                    message = await self._bot.send_photo(
+                        job.chat_id, photo=url, caption=job.text,
+                        parse_mode=ParseMode.HTML, has_spoiler=secret,
                     )
-                    for index, (url, secret) in enumerate(job.gallery[:MEDIA_GROUP_MAX])
-                ]
-                messages = await self._bot.send_media_group(job.chat_id, media)
-                return messages[0].message_id if messages else None
-            except (TelegramForbiddenError, TelegramRetryAfter):
-                raise
-            except Exception:
-                log.info("gallery for chat %s did not go through, sending text", job.chat_id)
-        elif len(job.gallery) == 1:
-            url, secret = job.gallery[0]
-            try:
-                message = await self._bot.send_photo(
-                    job.chat_id, photo=url, caption=job.text,
-                    parse_mode=ParseMode.HTML, has_spoiler=secret,
-                )
-                return message.message_id
-            except (TelegramForbiddenError, TelegramRetryAfter):
-                raise
-            except Exception:
-                log.info("icon for chat %s did not go through, sending text", job.chat_id)
+                    return message.message_id
+                except (TelegramForbiddenError, TelegramRetryAfter):
+                    raise
+                except Exception:
+                    log.info("icon for chat %s did not go through, sending text", job.chat_id)
 
-        message = await self._bot.send_message(job.chat_id, job.text, parse_mode=ParseMode.HTML)
-        return message.message_id
+            message = await self._bot.send_message(
+                job.chat_id, job.text, parse_mode=ParseMode.HTML
+            )
+            return message.message_id

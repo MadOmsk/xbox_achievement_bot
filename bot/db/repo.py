@@ -1502,14 +1502,25 @@ class Repo:
         )
         await self._conn.commit()
 
-    async def log_bot_message(self, chat_id: int, message_id: int) -> None:
+    async def log_bot_message(
+        self, chat_id: int, message_id: int, *, is_system: bool = True
+    ) -> None:
         """Called from the request middleware (bot/services/message_log.py)
-        for every message the bot sends to a group — the only record that
-        lets the admin panel's "стереть сообщения бота" find anything to
-        delete (SPEC 6.4)."""
+        for every message the bot sends *or edits* in a group — the only
+        record that lets the admin panel's "стереть сообщения бота" find
+        anything to delete (SPEC 6.4). Upserts rather than INSERT OR IGNORE
+        (2026-09-05 follow-up, is_system): an edit refreshes both sent_at
+        and is_system, on purpose — /hltb's own multi-step flow, for one,
+        edits the same message from a search prompt into the final result
+        card, and that edit must both reclassify it as "stats" and reset its
+        auto-delete clock, not leave it tagged (and aging out) as whatever
+        it was first logged as."""
         await self._conn.execute(
-            "INSERT OR IGNORE INTO bot_messages (chat_id, message_id, sent_at) VALUES (?, ?, ?)",
-            (chat_id, message_id, utcnow_iso()),
+            "INSERT INTO bot_messages (chat_id, message_id, sent_at, is_system) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(chat_id, message_id) DO UPDATE SET"
+            " sent_at = excluded.sent_at, is_system = excluded.is_system",
+            (chat_id, message_id, utcnow_iso(), 1 if is_system else 0),
         )
         await self._conn.commit()
 
@@ -1520,14 +1531,61 @@ class Repo:
         )
         return [row[0] for row in await cursor.fetchall()]
 
+    async def system_bot_messages_since(self, chat_id: int, since: datetime) -> list[int]:
+        """Same as `bot_messages_since`, restricted to is_system rows — the
+        admin panel's "удалить системные сообщения за 24 часа" (2026-09-05
+        follow-up), a narrower sibling of the unconditional 24h wipe that
+        leaves published achievements/stats/summaries untouched."""
+        cursor = await self._conn.execute(
+            "SELECT message_id FROM bot_messages WHERE chat_id = ? AND sent_at >= ? "
+            "AND is_system = 1",
+            (chat_id, _iso(since)),
+        )
+        return [row[0] for row in await cursor.fetchall()]
+
+    async def all_system_bot_messages(self, chat_id: int) -> list[int]:
+        """Unbounded version of `system_bot_messages_since` — the admin
+        panel's "удалить все системные сообщения" (2026-09-05 follow-up),
+        for whenever the 24h window isn't enough."""
+        cursor = await self._conn.execute(
+            "SELECT message_id FROM bot_messages WHERE chat_id = ? AND is_system = 1",
+            (chat_id,),
+        )
+        return [row[0] for row in await cursor.fetchall()]
+
+    async def due_system_messages(self, cutoff: datetime) -> list[tuple[int, int]]:
+        """System messages old enough to auto-delete (poller/message_cleanup.py,
+        2026-09-05 follow-up) — across every chat, not one at a time, since
+        the cleanup tick sweeps the whole bot in one pass."""
+        cursor = await self._conn.execute(
+            "SELECT chat_id, message_id FROM bot_messages WHERE is_system = 1 AND sent_at <= ?",
+            (_iso(cutoff),),
+        )
+        return [(row[0], row[1]) for row in await cursor.fetchall()]
+
     async def last_bot_message(self, chat_id: int) -> int | None:
-        """For /delete_last (SPEC 6.4's follow-up) — Telegram message_ids are
+        """For the admin panel's unconditional 24h wipe — deliberately not
+        filtered by is_system, unlike `last_non_system_bot_message` below."""
+        cursor = await self._conn.execute(
+            "SELECT message_id FROM bot_messages WHERE chat_id = ? "
+            "ORDER BY message_id DESC LIMIT 1",
+            (chat_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def last_non_system_bot_message(self, chat_id: int) -> int | None:
+        """For /delete_last (SPEC 6.4's follow-up, narrowed 2026-09-05):
+        skips past trailing system messages (prompts, /help, the hub) to
+        the last actual result — those are what "oops, wrong one just now"
+        is almost always about, and a system message a few seconds old is
+        about to clean itself up regardless. Telegram message_ids are
         assigned sequentially per chat, so the highest one logged here *is*
         the most recent, no timestamp-tie ambiguity the way sent_at alone
         would have (same-second messages are common right after a poll tick
         publishes more than one)."""
         cursor = await self._conn.execute(
-            "SELECT message_id FROM bot_messages WHERE chat_id = ? "
+            "SELECT message_id FROM bot_messages WHERE chat_id = ? AND is_system = 0 "
             "ORDER BY message_id DESC LIMIT 1",
             (chat_id,),
         )

@@ -34,6 +34,7 @@ from bot.db.repo import ChatPresenceRow, PlatformLink, RecentAchievement, Repo, 
 from bot.handlers.admin import IsAdmin
 from bot.poller.daily import build_summary, full_leaderboard
 from bot.services.achievements import platform_breakdown_suffix, plural_achievements, rarity_badge
+from bot.services.message_log import stats_category
 from bot.services.stats import counters_for, local_now
 from bot.services.tables import blockquote, truncate_name
 from bot.util import cooldown_minutes_left, humanize_ago, thousands, utcnow
@@ -288,14 +289,15 @@ async def _stats_games_limit(repo: Repo) -> int:
 @router.message(Command("stats"))
 async def stats(message: Message, repo: Repo, command: CommandObject) -> None:
     target = await _resolve(message, repo, command.args)
-    if target is None:
-        await message.answer(_UNKNOWN)
-        return
-    text = await _build_stats_text(repo, target)
-    if text is None:
-        await message.answer("Этот человек ещё ничего не подключил.")
-        return
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    with stats_category():
+        if target is None:
+            await message.answer(_UNKNOWN)
+            return
+        text = await _build_stats_text(repo, target)
+        if text is None:
+            await message.answer("Этот человек ещё ничего не подключил.")
+            return
+        await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 # --------------------------------------------------------------------- online
@@ -331,7 +333,8 @@ async def online(message: Message, repo: Repo) -> None:
 
     rows = await repo.chat_member_presence(message.chat.id)
     if not rows:
-        await message.answer("Никого из подключённых в этом чате пока не видел.")
+        with stats_category():
+            await message.answer("Никого из подключённых в этом чате пока не видел.")
         return
 
     # Plain text, no per-name buttons: a keyboard row per player stops being a
@@ -341,7 +344,8 @@ async def online(message: Message, repo: Repo) -> None:
     for row in rows:
         name = row.gamertag or f"id{row.tg_id}"
         lines.append(f"{_presence_icon(row)} {name} — {_presence_text(row)}")
-    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+    with stats_category():
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("who"))
@@ -389,7 +393,8 @@ async def who_stats_button(callback: CallbackQuery, repo: Repo) -> None:
     await callback.answer()
     if isinstance(callback.message, Message):
         if text is not None:
-            await callback.message.answer(text, parse_mode=ParseMode.HTML)
+            with stats_category():
+                await callback.message.answer(text, parse_mode=ParseMode.HTML)
         # The picker's own job is done either way — drop it instead of
         # leaving a stale "Чья статистика интересует?" behind.
         with contextlib.suppress(Exception):
@@ -440,12 +445,14 @@ async def summary_command(message: Message, repo: Repo) -> None:
 
     text, markup, minutes_left = await _summary_or_cooldown(repo, message.chat.id)
     if minutes_left:
+        # A rate-limit notice, not a report — system, not stats.
         await message.answer(f"Сводку уже присылали недавно. Ещё раз — через {minutes_left} мин.")
         return
-    if text is None:
-        await message.answer("За последние сутки в чате пока никто ничего не выбил.")
-        return
-    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    with stats_category():
+        if text is None:
+            await message.answer("За последние сутки в чате пока никто ничего не выбил.")
+            return
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("summary:all:"))
@@ -462,7 +469,8 @@ async def summary_show_all(callback: CallbackQuery, repo: Repo) -> None:
     )
     await callback.answer()
     if text is not None:
-        await callback.message.answer(text, parse_mode=ParseMode.HTML)
+        with stats_category():
+            await callback.message.answer(text, parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("recent"))
@@ -476,11 +484,12 @@ async def recent(message: Message, repo: Repo, command: CommandObject) -> None:
         limit = max(1, min(int(command.args.strip()), RECENT_MAX))
 
     rows = await repo.chat_recent(message.chat.id, limit)
-    if not rows:
-        await message.answer("Пока пусто.")
-        return
-    text = "🕘 <b>Последние достижения</b>\n" + _recent_list(rows)
-    await message.answer(text, parse_mode=ParseMode.HTML)
+    with stats_category():
+        if not rows:
+            await message.answer("Пока пусто.")
+            return
+        text = "🕘 <b>Последние достижения</b>\n" + _recent_list(rows)
+        await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 def _recent_list(rows: list[RecentAchievement]) -> str:
@@ -670,8 +679,13 @@ async def delete_last(message: Message, repo: Repo, bot: Bot) -> None:
     through a private-chat menu, overkill for "oops, wrong one just now".
     IsAdmin (admin.py) is the bot's own admin_tg_ids, same as everywhere
     else "admin" means in this project — not generic Telegram chat admins.
+
+    Targets the last *non-system* message (2026-09-05 follow-up) — a system
+    message a few seconds old is already about to clean itself up, and
+    "oops, wrong one just now" is almost always about an actual result
+    (an achievement post, a stats reply), not a prompt or a confirmation.
     """
-    message_id = await repo.last_bot_message(message.chat.id)
+    message_id = await repo.last_non_system_bot_message(message.chat.id)
     if message_id is None:
         await message.answer("Не нашёл сообщений бота в этом чате.")
         return

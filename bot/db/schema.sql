@@ -263,6 +263,16 @@ CREATE TABLE IF NOT EXISTS bot_messages (
     chat_id    INTEGER NOT NULL REFERENCES chats(chat_id) ON DELETE CASCADE,
     message_id INTEGER NOT NULL,
     sent_at    TEXT NOT NULL,
+    -- 1 = an intermediate/system message (prompt, confirmation, /help, the
+    -- group hub, etc.) — a candidate for poller/message_cleanup.py's own
+    -- auto-delete. 0 = one of the "stats" results (2026-09-05 follow-up:
+    -- /stats, /recent, /summary + the daily итог, achievement messages,
+    -- /online, /hltb's game card) — never auto-deleted. Set by
+    -- MessageLogMiddleware from a ContextVar (services/message_log.py's
+    -- own stats_category()), not passed in by each caller — defaults to 1
+    -- (system) so a call site that forgets to mark itself fails safe by
+    -- disappearing rather than by lingering forever.
+    is_system  INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (chat_id, message_id)
 );
 

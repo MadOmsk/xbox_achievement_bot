@@ -15,6 +15,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from bot.db.repo import Repo
 from bot.poller.daily import DailySummary
 from bot.poller.fetcher import Fetcher
+from bot.poller.message_cleanup import MessageCleanup
 from bot.poller.presence import PresencePoller
 from bot.poller.reminders import ReminderJob
 from bot.poller.steam_presence import SteamPresencePoller
@@ -33,6 +34,7 @@ class PollerScheduler:
         daily: DailySummary,
         repo: Repo,
         steam_poller: SteamPresencePoller,
+        message_cleanup: MessageCleanup,
     ) -> None:
         self._poller = poller
         self._fetcher = fetcher
@@ -40,6 +42,7 @@ class PollerScheduler:
         self._daily = daily
         self._repo = repo
         self._steam_poller = steam_poller
+        self._message_cleanup = message_cleanup
         self._scheduler = AsyncIOScheduler(timezone="UTC")
 
     def start(self) -> None:
@@ -80,6 +83,15 @@ class PollerScheduler:
             self._daily.tick,
             IntervalTrigger(seconds=TICK_SECONDS),
             id="daily_summary",
+            coalesce=True,
+            max_instances=1,
+        )
+        # Same cadence as everything else here — a message due at minute 5
+        # sits at most one tick past its TTL, not worth a tighter schedule.
+        self._scheduler.add_job(
+            self._message_cleanup.tick,
+            IntervalTrigger(seconds=TICK_SECONDS),
+            id="message_cleanup",
             coalesce=True,
             max_instances=1,
         )
