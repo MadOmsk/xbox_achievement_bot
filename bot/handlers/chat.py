@@ -510,7 +510,7 @@ def _recent_row(row: RecentAchievement) -> str:
         tail.append(f"{row.rarity_percent:g}%")
     tail_text = f" ({' · '.join(tail)})" if tail else ""
     return (
-        f"{badge} {gamertag} — {name}, {icon} {game}{tail_text}"
+        f"{badge} {gamertag} — {icon} {game}, {name}{tail_text}"
         f" · {humanize_ago(row.unlocked_at)}"
     )
 

@@ -80,6 +80,14 @@ def test_recent_row_shows_the_platform_icon_before_the_game_name() -> None:
     assert "⚫ Left 4 Dead 2" in steam_line
 
 
+def test_recent_row_puts_the_game_before_the_achievement_name() -> None:
+    """2026-09-05, second follow-up: swapped from "achievement, game" to
+    "game, achievement" — the platform icon still leads the game name
+    either way, only the order of the two names changed."""
+    line = _recent_row(row(name="Ashes to Ashes", game="Halo Infinite"))
+    assert line.index("Halo Infinite") < line.index("Ashes to Ashes")
+
+
 def test_recent_row_long_names_are_truncated() -> None:
     long_name = "A" * 40
     line = _recent_row(row(gamertag=long_name, name=long_name, game=long_name))
