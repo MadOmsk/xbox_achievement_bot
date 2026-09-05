@@ -44,6 +44,28 @@ class PublishJob:
     items: list[tuple[str, str]] = field(default_factory=list)  # (title_id, achievement_id)
 
 
+def _gallery(achievements: list[AchievementRow]) -> list[tuple[str, bool]]:
+    """One gallery entry per *distinct* icon, not per achievement — Xbox 360
+    achievements all share the same icon (the game's own box art, no
+    per-achievement art exists at all — SPEC 7.1), and a digest of several
+    x360 unlocks would otherwise repeat that one picture N times. Order
+    follows first appearance; an achievement sharing an already-seen icon
+    still forces that icon's spoiler on if it itself is secret, so a
+    same-icon secret never rides in unmarked behind an earlier public one.
+    """
+    order: list[str] = []
+    has_spoiler: dict[str, bool] = {}
+    for item in achievements:
+        if not item.icon_url:
+            continue
+        if item.icon_url not in has_spoiler:
+            order.append(item.icon_url)
+            has_spoiler[item.icon_url] = item.is_secret
+        elif item.is_secret:
+            has_spoiler[item.icon_url] = True
+    return [(url, has_spoiler[url]) for url in order]
+
+
 class Publisher:
     def __init__(self, bot: Bot, repo: Repo) -> None:
         self._bot = bot
@@ -94,7 +116,7 @@ class Publisher:
                         chat_id=chat.chat_id,
                         xuid=xuid,
                         text=format_digest(gamertag, title_name, allowed),
-                        gallery=[(a.icon_url, a.is_secret) for a in allowed if a.icon_url],
+                        gallery=_gallery(allowed),
                         items=[(a.title_id, a.achievement_id) for a in allowed],
                     )
                 )
@@ -110,7 +132,7 @@ class Publisher:
                         chat_id=chat.chat_id,
                         xuid=xuid,
                         text=format_single(gamertag, item, title_name),
-                        gallery=[(item.icon_url, item.is_secret)] if item.icon_url else [],
+                        gallery=_gallery([item]),
                         items=[(item.title_id, item.achievement_id)],
                     )
                 )
