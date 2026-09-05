@@ -95,10 +95,6 @@ class Publisher:
         if not achievements:
             return
 
-        user_settings = await self._repo.get_user_settings(tg_id)
-        if user_settings is None:
-            return
-
         for chat in await self._repo.publication_targets(tg_id):
             allowed = [
                 item
@@ -109,8 +105,11 @@ class Publisher:
                 continue
 
             # The digest decision is per chat and happens after filtering:
-            # what one chat sees as five achievements may be one in another.
-            if len(allowed) >= user_settings.digest_threshold:
+            # what one chat sees as five achievements may be one in another
+            # (digest_threshold lives on the subscription now, not on
+            # user_settings — Follow-up, 2026-09-05, same move as
+            # rarity_mode before it).
+            if len(allowed) >= chat.digest_threshold:
                 await self._queue.put(
                     PublishJob(
                         chat_id=chat.chat_id,

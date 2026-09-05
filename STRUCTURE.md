@@ -88,7 +88,8 @@
 │           ├── 015_drop_show_x360.sql           — show_x360 исчезает, общий rarity_mode (M-Steam-2e)
 │           ├── 016_rarity_mode_per_chat.sql     — rarity_mode: subscriptions, не user_settings
 │           ├── 017_steam_presence_grace.sql     — last_active_* для grace-периода поллера
-│           └── 018_titles_icon_url.sql          — обложка игры как иконка для ачивок Xbox 360
+│           ├── 018_titles_icon_url.sql          — обложка игры как иконка для ачивок Xbox 360
+│           └── 019_digest_threshold_per_chat.sql — digest_threshold: subscriptions, не user_settings
 │
 ├── scripts/                    — вспомогательные скрипты вне приложения, разовые/ручные
 │   ├── db_status.py              — сводка по базе для `manage.ps1 status` (без зависимостей)

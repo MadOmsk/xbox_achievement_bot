@@ -23,6 +23,13 @@
 -- into the identical shape again is a harmless no-op), a real one
 -- (production, at the point this actually runs there) still has it and
 -- this silently leaves it behind.
+--
+-- digest_threshold is ALSO not part of this rebuild (edited here after
+-- migration 019 moved it off user_settings too, the same way, 2026-09-05)
+-- — same reasoning again: schema.sql no longer creates it on a fresh
+-- database, keeping it here would collide the moment this migration runs.
+-- Migration 019 re-adds it to subscriptions afterward; this file only
+-- drops it from user_settings a little earlier than that.
 
 PRAGMA foreign_keys = OFF;
 
@@ -43,13 +50,12 @@ ALTER TABLE subscriptions_new RENAME TO subscriptions;
 
 CREATE TABLE user_settings_new (
     tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-    digest_threshold INTEGER NOT NULL DEFAULT 3,
     muted_title_ids  TEXT    NOT NULL DEFAULT '[]',
     tz_offset_min    INTEGER
 );
 
-INSERT INTO user_settings_new (tg_id, digest_threshold, muted_title_ids, tz_offset_min)
-SELECT tg_id, digest_threshold, muted_title_ids, tz_offset_min FROM user_settings;
+INSERT INTO user_settings_new (tg_id, muted_title_ids, tz_offset_min)
+SELECT tg_id, muted_title_ids, tz_offset_min FROM user_settings;
 
 DROP TABLE user_settings;
 ALTER TABLE user_settings_new RENAME TO user_settings;

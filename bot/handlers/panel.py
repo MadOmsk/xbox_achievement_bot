@@ -20,6 +20,7 @@ from bot.handlers.keyboards import (
     deep_link_keyboard,
     digest_keyboard,
     disconnect_prompt_keyboard,
+    format_digest,
     format_offset,
     format_rarity,
     next_rarity_mode,
@@ -124,30 +125,6 @@ async def panel_sync(
         await callback.message.answer(summary)
 
 
-@router.callback_query(F.data == "panel:digest")
-async def panel_digest_menu(callback: CallbackQuery, repo: Repo) -> None:
-    settings_row = await repo.get_user_settings(callback.from_user.id)
-    current = settings_row.digest_threshold if settings_row else 3
-    if isinstance(callback.message, Message):
-        with contextlib.suppress(Exception):
-            await callback.message.edit_text(
-                "Сводка вместо отдельных сообщений\n\n"
-                "Если за один раз в одной игре выбито столько достижений или больше — "
-                "в чат уйдёт одно сводное сообщение.",
-                reply_markup=digest_keyboard(current),
-            )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("panel:digest:"))
-async def panel_digest_set(callback: CallbackQuery, repo: Repo) -> None:
-    assert callback.data is not None
-    value = int(callback.data.rsplit(":", 1)[1])
-    await repo.update_user_settings(callback.from_user.id, digest_threshold=value)
-    await callback.answer("Никогда" if value >= DIGEST_NEVER else f"От {value}")
-    await _redraw(callback, repo)
-
-
 @router.callback_query(F.data == "panel:disconnect")
 async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
     """Same confirmation as /disconnect_xbox — the actual disconnect handlers
@@ -248,6 +225,12 @@ async def _chat_card(
             )
         )
         builder.row(
+            InlineKeyboardButton(
+                text=f"Сводка: {format_digest(chat.digest_threshold or 3)} ▸",
+                callback_data=f"panel:chatdigest:{chat_id}",
+            )
+        )
+        builder.row(
             InlineKeyboardButton(text="Отписаться", callback_data=f"panel:chatunsub:{chat_id}")
         )
     else:
@@ -293,6 +276,38 @@ async def panel_chat_rarity_cycle(callback: CallbackQuery, repo: Repo) -> None:
         return
     mode = next_rarity_mode(chat.rarity_mode or "all")
     await repo.update_subscription_rarity_mode(chat_id, callback.from_user.id, mode)
+    await _redraw_chat_card(callback, repo, chat_id)
+
+
+@router.callback_query(F.data.startswith("panel:chatdigest:"))
+async def panel_chat_digest_menu(callback: CallbackQuery, repo: Repo) -> None:
+    """Per chat now, not the main panel screen (Follow-up, 2026-09-05, same
+    move as the rarity toggle above it)."""
+    assert callback.data is not None
+    chat_id = int(callback.data.rsplit(":", 1)[1])
+    chat = await _find_user_chat(repo, callback.from_user.id, chat_id)
+    if chat is None or not chat.is_subscribed:
+        await callback.answer()
+        return
+    current = chat.digest_threshold or 3
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text(
+                "Сводка вместо отдельных сообщений\n\n"
+                "Если за один раз в одной игре выбито столько достижений или больше — "
+                "в этот чат уйдёт одно сводное сообщение.",
+                reply_markup=digest_keyboard(current, chat_id),
+            )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("panel:cdigestset:"))
+async def panel_chat_digest_set(callback: CallbackQuery, repo: Repo) -> None:
+    assert callback.data is not None
+    _, _, chat_id_raw, value_raw = callback.data.split(":")
+    chat_id, value = int(chat_id_raw), int(value_raw)
+    await repo.update_subscription_digest_threshold(chat_id, callback.from_user.id, value)
+    await callback.answer("Никогда" if value >= DIGEST_NEVER else f"От {value}")
     await _redraw_chat_card(callback, repo, chat_id)
 
 
@@ -388,12 +403,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     token = await repo.get_token(tg_id) if connected else None
     needs_reconnect = token is not None and token.status == "invalid"
     tz_offset = settings_row.tz_offset_min if settings_row else None
-    keyboard = panel_keyboard(
-        tz_offset,
-        settings_row.digest_threshold if settings_row else 3,
-        connected=connected,
-        needs_reconnect=needs_reconnect,
-    )
+    keyboard = panel_keyboard(tz_offset, connected=connected, needs_reconnect=needs_reconnect)
 
     if user is None or not user.xuid:
         text = "👤 Панель\n\nВход XBOX: — не подключён"

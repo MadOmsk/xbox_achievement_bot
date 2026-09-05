@@ -53,6 +53,11 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     -- New subscriptions default to 'all', same as user_settings used to.
     rarity_mode TEXT NOT NULL DEFAULT 'all'
                 CHECK (rarity_mode IN ('all', 'rare', 'hidden')),
+    -- Per (person, chat), same move as rarity_mode above and for the same
+    -- reason (Follow-up, 2026-09-05) — how many achievements at once
+    -- deserve one summary message instead of separate ones can reasonably
+    -- differ between a quiet chat and a busy one.
+    digest_threshold INTEGER NOT NULL DEFAULT 3,
     PRIMARY KEY (chat_id, tg_id)
 );
 
@@ -67,15 +72,16 @@ CREATE TABLE IF NOT EXISTS chat_seen (
 
 CREATE TABLE IF NOT EXISTS user_settings (
     tg_id            INTEGER PRIMARY KEY REFERENCES users(tg_id) ON DELETE CASCADE,
-    -- rarity_mode used to live here, one value for every chat a person
-    -- publishes to. Moved to subscriptions.rarity_mode (one per chat, not
-    -- one for all of them) — a chat with close friends and a big public
-    -- one can reasonably want different answers to "what's worth showing".
-    -- Still one mode for every platform though (Xbox modern, Xbox 360,
-    -- Steam — M-Steam-2e, SPEC 1.4): a platform with no rarity_percent at
-    -- all (currently only Xbox 360) is exempt from the rarity check under
-    -- 'rare' rather than getting a switch of its own.
-    digest_threshold INTEGER NOT NULL DEFAULT 3,
+    -- rarity_mode and digest_threshold used to live here, one value for
+    -- every chat a person publishes to. Both moved to subscriptions (one
+    -- per chat, not one for all of them — Follow-ups, SPEC 9 M-Steam-2e
+    -- and 2026-09-05) — a chat with close friends and a big public one can
+    -- reasonably want different answers to both "what's worth showing" and
+    -- "how many at once is a lot". rarity_mode is still one mode for every
+    -- platform though (Xbox modern, Xbox 360, Steam — M-Steam-2e, SPEC
+    -- 1.4): a platform with no rarity_percent at all (currently only Xbox
+    -- 360) is exempt from the rarity check under 'rare' rather than
+    -- getting a switch of its own.
     muted_title_ids  TEXT    NOT NULL DEFAULT '[]',
     tz_offset_min    INTEGER                       -- minutes from UTC, NULL = global timezone
 );

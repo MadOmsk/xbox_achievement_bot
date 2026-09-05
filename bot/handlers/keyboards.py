@@ -104,7 +104,6 @@ def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMar
 
 def panel_keyboard(
     tz_offset_min: int | None,
-    digest_threshold: int = 3,
     *,
     connected: bool = True,
     needs_reconnect: bool = False,
@@ -124,12 +123,6 @@ def panel_keyboard(
     rows += [
         [
             InlineKeyboardButton(
-                text=f"Сводка: {format_digest(digest_threshold)} ▸",
-                callback_data="panel:digest",
-            )
-        ],
-        [
-            InlineKeyboardButton(
                 text=f"Часовой пояс: {format_offset(tz_offset_min)} ▸",
                 callback_data="panel:tz",
             )
@@ -142,16 +135,21 @@ def panel_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def digest_keyboard(current: int) -> InlineKeyboardMarkup:
+def digest_keyboard(current: int, chat_id: int) -> InlineKeyboardMarkup:
+    """Per chat now, not the main panel screen (Follow-up, 2026-09-05, same
+    move as rarity_mode before it) — "Назад" goes back to that chat's own
+    card, not the panel root."""
     builder = InlineKeyboardBuilder()
     for value in DIGEST_CHOICES:
         mark = "• " if value == current else ""
         label = "никогда" if value >= DIGEST_NEVER else str(value)
         builder.add(
-            InlineKeyboardButton(text=f"{mark}{label}", callback_data=f"panel:digest:{value}")
+            InlineKeyboardButton(
+                text=f"{mark}{label}", callback_data=f"panel:cdigestset:{chat_id}:{value}"
+            )
         )
     builder.adjust(4)
-    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="panel:refresh"))
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data=f"panel:chat:{chat_id}"))
     return builder.as_markup()
 
 

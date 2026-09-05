@@ -37,9 +37,9 @@ def test_needs_reconnect_adds_a_button_without_hiding_settings() -> None:
     assert "relogin" not in _callback_data(connected)
     data = _callback_data(reconnecting)
     assert data[0] == "relogin"  # up front, not buried under settings
-    assert "panel:digest" in data  # settings still reachable, not replaced
+    assert "panel:tz" in data  # settings still reachable, not replaced
 
 
 def test_connected_keyboard_offers_disconnect() -> None:
-    markup = panel_keyboard(180, 3, connected=True)
+    markup = panel_keyboard(180, connected=True)
     assert "panel:disconnect" in _callback_data(markup)
