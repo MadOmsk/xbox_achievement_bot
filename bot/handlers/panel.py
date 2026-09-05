@@ -403,7 +403,12 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     token = await repo.get_token(tg_id) if connected else None
     needs_reconnect = token is not None and token.status == "invalid"
     tz_offset = settings_row.tz_offset_min if settings_row else None
-    keyboard = panel_keyboard(tz_offset, connected=connected, needs_reconnect=needs_reconnect)
+    keyboard = panel_keyboard(
+        tz_offset,
+        connected=connected,
+        needs_reconnect=needs_reconnect,
+        steam_connected=steam_link is not None,
+    )
 
     if user is None or not user.xuid:
         text = "👤 Панель\n\nВход XBOX: — не подключён"

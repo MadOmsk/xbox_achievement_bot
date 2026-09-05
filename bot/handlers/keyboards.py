@@ -102,24 +102,31 @@ def disconnect_prompt_keyboard(*, from_panel: bool = False) -> InlineKeyboardMar
     )
 
 
+STEAM_CONNECT_BUTTON = InlineKeyboardButton(
+    text="🎮 Подключить Steam", callback_data="steam:connect"
+)
+
+
 def panel_keyboard(
     tz_offset_min: int | None,
     *,
     connected: bool = True,
     needs_reconnect: bool = False,
+    steam_connected: bool = False,
 ) -> InlineKeyboardMarkup:
     if not connected:
-        # Nothing else on the panel means anything before there is an account
-        # to apply it to.
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Подключить XBOX", callback_data="relogin")]
-            ]
-        )
+        # Xbox and Steam are independent (M-Steam-1) — someone with neither
+        # connected yet should be offered both, not just Xbox first.
+        rows = [[InlineKeyboardButton(text="🔗 Подключить XBOX", callback_data="relogin")]]
+        if not steam_connected:
+            rows.append([STEAM_CONNECT_BUTTON])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     rows: list[list[InlineKeyboardButton]] = []
     if needs_reconnect:
         rows.append([InlineKeyboardButton(text="🔄 Подключить заново", callback_data="relogin")])
+    if not steam_connected:
+        rows.append([STEAM_CONNECT_BUTTON])
     rows += [
         [
             InlineKeyboardButton(

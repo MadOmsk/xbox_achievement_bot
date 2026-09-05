@@ -123,6 +123,7 @@
 │   ├── test_message_log.py        — лог сообщений бота, фильтр по типу чата, last_bot_message
 │   ├── test_hltb.py               — поиск/кэш HLTB, пагинация, очистка запроса
 │   ├── test_steam.py              — разбор ссылки/ID, привязка аккаунта (M-Steam-1)
+│   ├── test_steam_connect.py      — флоу входа в Steam: prompt_for_link, AwaitingSteamLink
 │   ├── test_steam_achievements.py — fetch_unlocked(), кэш схемы/редкости Steam (M-Steam-2b)
 │   ├── test_steam_fetcher.py      — опрос ачивок Steam по игре, бэкфил (M-Steam-2d)
 │   ├── test_steam_presence.py     — Steam-презенс, финальный опрос, grace-период

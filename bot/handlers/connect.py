@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -22,7 +22,7 @@ from bot.handlers.keyboards import (
     timezone_keyboard,
 )
 from bot.handlers.panel import render_panel
-from bot.handlers.steam import LINK_PROMPT, NOT_CONFIGURED
+from bot.handlers.steam import prompt_for_link
 from bot.services.connect import ConnectService
 from bot.services.notify import AdminNotifier
 from bot.util import parse_utc_offset
@@ -52,6 +52,7 @@ async def start_with_payload(
     repo: Repo,
     connect: ConnectService,
     settings: Settings,
+    bot: Bot,
 ) -> None:
     """Deep link from a group chat: its buttons send people here (SPEC 6.3)."""
     await repo.ensure_user(message.chat.id, _username(message))
@@ -60,17 +61,11 @@ async def start_with_payload(
         await message.answer(text, reply_markup=markup)
         return
     if command.args == "connectsteam":
-        # Straight to the prompt, same as /connect_steam's own empty-args
-        # reply — a deep link can't carry the profile URL itself, so this
-        # is as far as a button tap can get (steam.py's own module doc).
-        if settings.steam_api_key is None:
-            await message.answer(NOT_CONFIGURED)
-            return
-        link = await repo.get_platform_link(message.chat.id, "steam")
-        if link is not None:
-            await message.answer(f"Steam уже подключён: {link.display_name}.")
-            return
-        await message.answer(LINK_PROMPT)
+        # Same prompt-and-wait as every other door into this flow
+        # (steam.py's prompt_for_link, 2026-09-05 follow-up) — a deep link
+        # can't carry the profile URL itself, but landing here now arms the
+        # wait too, so there's nothing left to type but the link itself.
+        await prompt_for_link(bot, repo, settings, message.chat.id)
         return
     is_connect, origin_chat_id = _parse_connect_payload(command.args or "")
     if is_connect:

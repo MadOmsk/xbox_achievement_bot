@@ -7,6 +7,15 @@ same way here). Found live: an earlier version filtered group chat out at
 the router level with no reply at all — from inside a group that reads as
 the bot simply not responding, not as "try this in DM". Redirects instead,
 same pattern as /panel in a group (panel.py's panel_in_group).
+
+Steam login flow (Follow-up, 2026-09-05): a person no longer has to retype
+the whole command with the link as an argument. Pressing the panel button,
+running the bare command, or arriving via the group hub's deep link all
+just arm a wait for the *next* plain message and treat that as the link or
+nickname (`resolve_steam_id`, services/steam/client.py, already accepts
+either). Found live too: someone can just paste a steamcommunity.com link
+with no prior command at all — that gets a one-tap confirm instead of
+being silently ignored.
 """
 
 from __future__ import annotations
@@ -17,8 +26,14 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.filters import BaseFilter, Command, CommandObject
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
 
 from bot.config import Settings
 from bot.db.repo import Repo
@@ -33,23 +48,50 @@ router = Router(name="steam")
 NOT_CONFIGURED = "Подключение Steam пока не настроено — обратитесь к администратору."
 PRIVACY_URL = "https://steamcommunity.com/my/edit/settings"
 GROUP_HINT_TTL = 30
-# Shared with connect.py's ?start=connectsteam deep link (the hub keyboard's
-# "Подключить Steam" button) — same prompt either way someone gets here.
+# Shown by every path that ends in "now send me the link" — bare
+# /connect_steam, the panel button, and the group hub's deep link alike.
+# The privacy warning is up front on purpose (2026-09-05 follow-up): it
+# used to only show up *after* a failed attempt (still does, below, in
+# case someone doesn't read this first or fixes it only after sending the
+# link), which meant a round trip everyone with a private profile hit once.
 LINK_PROMPT = (
     "Пришли ссылку на свой профиль Steam (steamcommunity.com/id/...) "
-    "или SteamID64 — команда так: /connect_steam <ссылка>."
+    "или просто ник — подключу по нему.\n\n"
+    "⚠️ Игровая статистика должна быть публичной, иначе не смогу читать "
+    f"достижения: {PRIVACY_URL} → «Игровая статистика» → «Всем»."
 )
 
+# tg_ids who just pressed "Подключить Steam" (button, bare command, or the
+# group hub's deep link) — their next plain private message is the link or
+# nickname, not something to route anywhere else. In-memory only, like
+# admin.py's own _awaiting_input: nothing here is worth surviving a
+# restart, and a stray leftover entry is harmless — it only ever affects
+# what happens to that one person's very next private message.
+_awaiting_link: set[int] = set()
 
-async def _redirect_to_dm(message: Message, bot: Bot, hint_text: str) -> None:
-    # No deep-link payload: /connect_steam needs an argument (the profile
-    # link) a button tap can't supply anyway, so this just opens the DM —
-    # the hint text says what to type once there, same honesty as the
-    # command's own "empty args" reply.
+# tg_id -> the raw text of a steamcommunity.com link spotted in an
+# *unprompted* message, waiting on a yes/no tap (steam_link_spotted below).
+_pending_confirmation: dict[int, str] = {}
+
+# Loose on purpose — /id/ and /profiles/ cover every real profile URL shape,
+# and being stricter buys nothing: a false match here just offers a button
+# that goes nowhere useful if tapped on garbage, a false miss silently does
+# nothing, which is the worse failure of the two.
+_STEAM_LINK_PATTERN = r"(?i)steamcommunity\.com/(id|profiles)/"
+
+
+class AwaitingSteamLink(BaseFilter):
+    async def __call__(self, event: TelegramObject) -> bool:
+        user = getattr(event, "from_user", None)
+        return user is not None and user.id in _awaiting_link
+
+
+async def _redirect_to_dm(
+    message: Message, bot: Bot, hint_text: str, *, payload: str | None = None
+) -> None:
     me = await bot.me()
-    hint = await message.answer(
-        hint_text, reply_markup=deep_link_keyboard(f"https://t.me/{me.username}")
-    )
+    url = f"https://t.me/{me.username}" + (f"?start={payload}" if payload else "")
+    hint = await message.answer(hint_text, reply_markup=deep_link_keyboard(url))
     asyncio.create_task(_delete_later(bot, hint.chat.id, hint.message_id))  # noqa: RUF006
 
 
@@ -61,12 +103,45 @@ async def _delete_later(bot: Bot, chat_id: int, message_id: int) -> None:
 
 @router.message(Command("connect_steam"), F.chat.type != ChatType.PRIVATE)
 async def connect_steam_in_group(message: Message, bot: Bot) -> None:
-    await _redirect_to_dm(message, bot, "Напиши мне в личку: /connect_steam <ссылка на профиль>.")
+    # ?start=connectsteam (connect.py) is the same deep link the group hub's
+    # own "🎮 Подключить Steam" button already uses — landing in DM this way
+    # arms the wait immediately, so there is nothing left to type but the
+    # link itself (2026-09-05 follow-up).
+    await _redirect_to_dm(
+        message, bot, "Напиши мне в личку — подключим Steam там.", payload="connectsteam"
+    )
 
 
 @router.message(Command("disconnect_steam"), F.chat.type != ChatType.PRIVATE)
 async def disconnect_steam_in_group(message: Message, bot: Bot) -> None:
     await _redirect_to_dm(message, bot, "Эта команда — в личке.")
+
+
+async def prompt_for_link(bot: Bot, repo: Repo, settings: Settings, tg_id: int) -> None:
+    """The shared "now send me the link" step — bare /connect_steam, the
+    panel button, and the deep link all go through this one place, so
+    "already connected" and "not configured" are answered the same way
+    regardless of which door someone came in through."""
+    if settings.steam_api_key is None:
+        await bot.send_message(tg_id, NOT_CONFIGURED)
+        return
+    link = await repo.get_platform_link(tg_id, "steam")
+    if link is not None:
+        await bot.send_message(tg_id, f"Steam уже подключён: {link.display_name}.")
+        return
+    _awaiting_link.add(tg_id)
+    await bot.send_message(tg_id, LINK_PROMPT)
+
+
+@router.callback_query(F.data == "steam:connect")
+async def steam_connect_button(
+    callback: CallbackQuery, repo: Repo, settings: Settings, bot: Bot
+) -> None:
+    """The panel's own "🎮 Подключить Steam" button (2026-09-05 follow-up) —
+    same prompt-and-wait as everywhere else, panel.py never had a Steam
+    button at all before this."""
+    await prompt_for_link(bot, repo, settings, callback.from_user.id)
+    await callback.answer()
 
 
 @router.message(Command("connect_steam"), F.chat.type == ChatType.PRIVATE)
@@ -78,49 +153,135 @@ async def connect_steam(
     steam_fetcher: SteamFetcher,
     bot: Bot,
 ) -> None:
-    if settings.steam_api_key is None:
-        await message.answer(NOT_CONFIGURED)
-        return
-
     raw = (command.args or "").strip()
     if not raw:
-        await message.answer(LINK_PROMPT)
+        # No argument — wait for the next message instead of making someone
+        # retype the whole command with the link tacked on (2026-09-05).
+        await prompt_for_link(bot, repo, settings, message.chat.id)
+        return
+    username = message.from_user.username if message.from_user else None
+    await _connect(bot, repo, settings, steam_fetcher, message.chat.id, username, raw)
+
+
+@router.message(F.chat.type == ChatType.PRIVATE, AwaitingSteamLink())
+async def steam_link_provided(
+    message: Message, repo: Repo, settings: Settings, steam_fetcher: SteamFetcher, bot: Bot
+) -> None:
+    """The answer to prompt_for_link's own prompt — whatever this message
+    says, resolve_steam_id (services/steam/client.py) already accepts a
+    full link, a bare SteamID64, or just a vanity nickname."""
+    _awaiting_link.discard(message.from_user.id)
+    username = message.from_user.username if message.from_user else None
+    await _connect(
+        bot, repo, settings, steam_fetcher, message.chat.id, username, (message.text or "").strip()
+    )
+
+
+@router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(_STEAM_LINK_PATTERN))
+async def steam_link_spotted(message: Message) -> None:
+    """Found live: someone pasted a steamcommunity.com link with no prior
+    command at all. Registered after steam_link_provided above, so anyone
+    already in the explicit flow lands there instead — this is only for a
+    link that shows up out of nowhere, and gets a one-tap confirm rather
+    than silently doing nothing with it (2026-09-05 follow-up)."""
+    assert message.text is not None and message.from_user is not None
+    _pending_confirmation[message.from_user.id] = message.text.strip()
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, подключить", callback_data="steam:linkyes")],
+            [InlineKeyboardButton(text="Нет", callback_data="steam:linkno")],
+        ]
+    )
+    await message.answer("Похоже на профиль Steam. Подключить его?", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "steam:linkno")
+async def steam_link_decline(callback: CallbackQuery) -> None:
+    _pending_confirmation.pop(callback.from_user.id, None)
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_text("Хорошо, не подключаю.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "steam:linkyes")
+async def steam_link_accept(
+    callback: CallbackQuery, repo: Repo, settings: Settings, steam_fetcher: SteamFetcher, bot: Bot
+) -> None:
+    raw = _pending_confirmation.pop(callback.from_user.id, None)
+    if isinstance(callback.message, Message):
+        with contextlib.suppress(Exception):
+            await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    if raw is None:
+        return
+    username = callback.from_user.username
+    await _connect(bot, repo, settings, steam_fetcher, callback.from_user.id, username, raw)
+
+
+async def _connect(
+    bot: Bot,
+    repo: Repo,
+    settings: Settings,
+    steam_fetcher: SteamFetcher,
+    tg_id: int,
+    username: str | None,
+    raw: str,
+) -> None:
+    """The actual link-and-backfill, shared by every entry point above —
+    replying through `bot.send_message(tg_id, ...)` rather than a specific
+    inbound Message's `.answer()` so it works the same whether triggered by
+    a command, a plain message, or a callback confirmation."""
+    if settings.steam_api_key is None:
+        await bot.send_message(tg_id, NOT_CONFIGURED)
+        return
+    if not raw:
+        await prompt_for_link(bot, repo, settings, tg_id)
         return
 
     api_key = settings.steam_api_key.get_secret_value()
     try:
         steam_id = await resolve_steam_id(api_key, raw)
         profile = await get_profile(api_key, steam_id)
-    except SteamApiError:
-        await message.answer(
+    except SteamApiError as exc:
+        # Found live: a report of "couldn't connect Steam" turned out
+        # impossible to diagnose after the fact — nothing logged which of
+        # the failure branches a given attempt actually hit (2026-09-05).
+        # `raw` is whatever the person typed, not a secret — same as a
+        # gamertag, safe to log as-is.
+        log.info("connect_steam: could not resolve tg_id=%s raw=%r: %s", tg_id, raw, exc)
+        await bot.send_message(
+            tg_id,
             "Не нашёл такой профиль Steam. Проверь ссылку — например, "
-            "https://steamcommunity.com/id/gaben."
+            "https://steamcommunity.com/id/gaben.",
         )
         return
 
     if not profile.is_public:
-        await message.answer(
+        log.info("connect_steam: private profile for tg_id=%s steam_id=%s", tg_id, steam_id)
+        await bot.send_message(
+            tg_id,
             "Профиль есть, но игровая статистика скрыта — я не смогу читать "
             "достижения. Сделай её публичной и попробуй снова: "
-            f"{PRIVACY_URL} → «Игровая статистика» → «Всем»."
+            f"{PRIVACY_URL} → «Игровая статистика» → «Всем».",
         )
         return
 
-    username = message.from_user.username if message.from_user else None
-    await repo.ensure_user(message.chat.id, username)
-    await repo.link_platform_account(
-        message.chat.id, "steam", profile.steam_id, profile.persona_name
-    )
-    await message.answer(f"Подключил Steam: {profile.persona_name}.")
+    await repo.ensure_user(tg_id, username)
+    await repo.link_platform_account(tg_id, "steam", profile.steam_id, profile.persona_name)
+    log.info("connect_steam: tg_id=%s linked steam_id=%s", tg_id, profile.steam_id)
+    await bot.send_message(tg_id, f"Подключил Steam: {profile.persona_name}.")
 
     # Backgrounded (SPEC 9, M-Steam-2d) — a big library is genuinely
-    # hundreds of requests, the /connect_steam reply must not wait for it.
-    # Run on every link, not just the first (link_platform_account already
+    # hundreds of requests, the reply above must not wait for it. Run on
+    # every link, not just the first (link_platform_account already
     # replaces an existing one) — idempotent and safe, same reasoning as
     # Xbox's refresh_after_reconnect (main.py).
-    await message.answer("Читаю твою историю достижений Steam, это может занять пару минут…")
+    await bot.send_message(
+        tg_id, "Читаю твою историю достижений Steam, это может занять пару минут…"
+    )
     asyncio.create_task(  # noqa: RUF006
-        _backfill_and_notify(bot, steam_fetcher, message.chat.id, profile.steam_id)
+        _backfill_and_notify(bot, steam_fetcher, tg_id, profile.steam_id)
     )
 
 

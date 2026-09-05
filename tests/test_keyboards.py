@@ -25,9 +25,22 @@ def test_unknown_rarity_mode_starts_the_cycle_over() -> None:
     assert next_rarity_mode("whatever") == "rare"
 
 
-def test_not_connected_keyboard_has_only_a_connect_button() -> None:
+def test_not_connected_keyboard_offers_both_platforms() -> None:
+    """Xbox and Steam are independent (M-Steam-1) — someone with neither
+    connected should be offered both, not just Xbox (2026-09-05 follow-up)."""
     markup = panel_keyboard(None, connected=False)
+    assert _callback_data(markup) == ["relogin", "steam:connect"]
+
+
+def test_not_connected_keyboard_hides_steam_button_once_connected() -> None:
+    markup = panel_keyboard(None, connected=False, steam_connected=True)
     assert _callback_data(markup) == ["relogin"]
+
+
+def test_connected_keyboard_offers_steam_only_until_connected() -> None:
+    assert "steam:connect" in _callback_data(panel_keyboard(180, connected=True))
+    connected_both = panel_keyboard(180, connected=True, steam_connected=True)
+    assert "steam:connect" not in _callback_data(connected_both)
 
 
 def test_needs_reconnect_adds_a_button_without_hiding_settings() -> None:
