@@ -10,18 +10,19 @@ from html import escape as html_escape
 from bot.db.repo import AchievementRow, ChatTarget
 from bot.util import thousands
 
-#  Two badges, not three (2026-09-05 terminology/style pass) — a diamond
-#  for "редкая" (rare), a cup for "обычная" (common), nothing at all when
-#  there's no rarity_percent to judge by in the first place (Xbox 360):
-#  absence of data is not the same claim as "common", so it stays silent
-#  rather than defaulting to the cup.
+#  Two badges (2026-09-05 style pass) — a diamond for "редкая" (rare), a
+#  cup for "обычная" (common). Every achievement gets one or the other,
+#  including when there's no rarity_percent to judge by at all (Xbox 360,
+#  backfilled rows) — unproven is not "rare", so it defaults to the cup
+#  rather than going unbadged (found live: a whole game's worth of
+#  achievements with no badge at all read as broken, not as "no data").
 RARE_BADGE_MAX_PERCENT = 15.0
 
 
 def rarity_badge(rarity_percent: float | None) -> str:
-    if rarity_percent is None:
-        return ""
-    return "💎" if rarity_percent <= RARE_BADGE_MAX_PERCENT else "🏆"
+    if rarity_percent is not None and rarity_percent <= RARE_BADGE_MAX_PERCENT:
+        return "💎"
+    return "🏆"
 
 
 # Same palette as /stats' and /online's platform circles (handlers/chat.py)
@@ -29,7 +30,7 @@ def rarity_badge(rarity_percent: float | None) -> str:
 # handlers (CLAUDE.md's layering rule runs one way only). Labels are needed
 # here and not there, so the two dicts aren't identical either.
 _PLATFORM_ICON = {"modern": "🟢", "x360": "🟢", "steam": "⚫", "psn": "🔵"}
-_PLATFORM_LABEL = {"modern": "Xbox", "x360": "Xbox 360", "steam": "Steam", "psn": "PlayStation"}
+_PLATFORM_LABEL = {"modern": "XBOX", "x360": "XBOX 360", "steam": "Steam", "psn": "PlayStation"}
 
 
 def platform_tag(platform: str) -> str:
@@ -116,8 +117,7 @@ def _rarity_line(achievement: AchievementRow) -> str:
     all (SPEC 9, future platforms fall under this for free).
     """
     name = _spoiler(html_escape(achievement.name), secret=achievement.is_secret)
-    badge = rarity_badge(achievement.rarity_percent)
-    name_part = f"{badge} «{name}»" if badge else f"«{name}»"
+    name_part = f"{rarity_badge(achievement.rarity_percent)} «{name}»"
 
     tail = []
     if achievement.gamerscore:

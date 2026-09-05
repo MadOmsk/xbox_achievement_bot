@@ -107,7 +107,7 @@ async def subscribe(message: Message, repo: Repo) -> None:
     if user is None or not user.xuid:
         me = await message.bot.me()  # type: ignore[union-attr]
         await message.answer(
-            f"Сначала подключи Xbox в личке: https://t.me/{me.username}?start=connect"
+            f"Сначала подключи XBOX в личке: https://t.me/{me.username}?start=connect"
         )
         return
 
@@ -119,7 +119,7 @@ async def subscribe(message: Message, repo: Repo) -> None:
         await repo.subscribe(message.chat.id, message.from_user.id)
     await message.answer(
         f"Готово. Ачивки {user.gamertag or 'твои'} будут прилетать сюда.\n"
-        "Настройки редкости и Xbox 360 — в личке, /panel."
+        "Настройки редкости и XBOX 360 — в личке, /panel."
     )
 
 
@@ -220,7 +220,7 @@ async def _build_stats_text(repo: Repo, target: User) -> str | None:
     lines = [f"📊 <b>{html_escape(_display_name(target, platform_links))}</b>"]
     if target.xuid:
         lines.append(
-            f"{_PLATFORM_ICON['modern']} Xbox: {html_escape(target.gamertag or 'без геймертега')}"
+            f"{_PLATFORM_ICON['modern']} XBOX: {html_escape(target.gamertag or 'без геймертега')}"
             f"  ·  gamerscore {thousands(target.gamerscore or 0)}"
         )
     for link in platform_links:
@@ -462,12 +462,15 @@ def _recent_row(row: RecentAchievement) -> str:
     name = html_escape(truncate_name(row.name))
     if row.is_secret:
         name = f'<span class="tg-spoiler">{name}</span>'
+    # Leads the line instead of a fixed "🏆" bullet (2026-09-05) — now that
+    # rarity_badge() always returns something (diamond or cup, never
+    # empty), a separate generic bullet would double up with it on every
+    # "common" row: two trophies back to back on the same line.
     badge = rarity_badge(row.rarity_percent)
-    tail = f" {badge}" if badge else ""
     gamertag = html_escape(truncate_name(row.gamertag or "кто-то"))
     game = html_escape(truncate_name(row.game or "без названия"))
     return (
-        f"🏆 {gamertag} — {name}, {game} (+{thousands(row.gamerscore)} G){tail}"
+        f"{badge} {gamertag} — {name}, {game} (+{thousands(row.gamerscore)} G)"
         f" · {humanize_ago(row.unlocked_at)}"
     )
 
@@ -500,9 +503,9 @@ async def _resolve(message: Message, repo: Repo, argument: str | None) -> User |
 # Most-used first, subscribe/unsubscribe at the end — those are one-time
 # setup, not something read every time (SPEC 6.3).
 HELP_TEXT = (
-    "🎮 Слежу за достижениями тех, кто играет на Xbox, и публикую их сюда — "
+    "🎮 Слежу за достижениями тех, кто играет на XBOX, и публикую их сюда — "
     "с фильтром по редкости, статистикой каждого и итогом дня.\n\n"
-    "Первый раз здесь — жми «Подключить Xbox» (или Steam — тоже умею).\n"
+    "Первый раз здесь — жми «Подключить XBOX» (или Steam — тоже умею).\n"
     "Уже подключён, но достижений не видно — жми «Публиковать мои достижения».\n"
     "Что-то не работает — попробуй подключиться заново.\n\n"
     "Команды чата:\n"
@@ -536,7 +539,7 @@ def hub_keyboard(bot_username: str, chat_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="✅ Публиковать мои достижения", callback_data="sub:on")],
             [
                 InlineKeyboardButton(
-                    text="🔗 Подключить Xbox",
+                    text="🔗 Подключить XBOX",
                     # The chat id rides along in the deep-link payload so a
                     # successful login can auto-subscribe him right back here
                     # (SPEC 6.3) — see _parse_connect_payload in connect.py.
@@ -602,7 +605,7 @@ async def subscribe_button(callback: CallbackQuery, repo: Repo, bot: Bot) -> Non
     user = await repo.get_user(callback.from_user.id)
     if user is None or not user.xuid:
         # Don't just tell him to go connect somewhere — send him straight into
-        # the same login deep link as the "Подключить Xbox" button. It carries
+        # the same login deep link as the "Подключить XBOX" button. It carries
         # this chat's id, so ConnectService auto-subscribes here once he's
         # done (SPEC 6.3); no need to remember to come back and press this
         # button again.

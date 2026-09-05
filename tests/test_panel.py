@@ -13,7 +13,7 @@ async def test_no_accounts_shows_only_xbox_not_connected(repo: Repo) -> None:
 
     text, _markup = await render_panel(repo, TG_ID)
 
-    assert "Вход Xbox: — не подключён" in text
+    assert "Вход XBOX: — не подключён" in text
     assert "Вход Steam" not in text
 
 
@@ -23,7 +23,7 @@ async def test_steam_linked_without_xbox_shows_both_lines(repo: Repo) -> None:
 
     text, _markup = await render_panel(repo, TG_ID)
 
-    assert "Вход Xbox: — не подключён" in text
+    assert "Вход XBOX: — не подключён" in text
     assert "Вход Steam: Gabe" in text
 
 
@@ -33,7 +33,7 @@ async def test_xbox_connected_without_steam_has_no_steam_line(repo: Repo) -> Non
 
     text, _markup = await render_panel(repo, TG_ID)
 
-    assert "Вход Xbox:   " in text
+    assert "Вход XBOX:   " in text
     assert "Вход Steam" not in text
 
 
@@ -44,5 +44,5 @@ async def test_both_platforms_linked_show_both_lines(repo: Repo) -> None:
 
     text, _markup = await render_panel(repo, TG_ID)
 
-    assert "Вход Xbox:   " in text
+    assert "Вход XBOX:   " in text
     assert "Вход Steam:  Gabe" in text

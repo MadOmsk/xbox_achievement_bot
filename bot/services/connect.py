@@ -30,7 +30,7 @@ class ConnectService:
     """Hands out one-time `state` values and completes the OAuth callback.
 
     States live in memory only: a restart mid-login just means pressing
-    «Подключить Xbox» again, which is cheaper than another table.
+    «Подключить XBOX» again, which is cheaper than another table.
     """
 
     def __init__(self, auth: XboxAuthService, repo: Repo) -> None:
@@ -39,7 +39,7 @@ class ConnectService:
         self._pending: dict[str, _PendingState] = {}
 
     def start_login(self, tg_id: int, origin_chat_id: int | None = None) -> str:
-        """`origin_chat_id` is the group the person pressed «Подключить Xbox»
+        """`origin_chat_id` is the group the person pressed «Подключить XBOX»
         from, if any — carried through to `complete_login` so we can
         auto-subscribe him there once the login actually succeeds (SPEC 6.3).
         """
@@ -64,7 +64,7 @@ class ConnectService:
         if owner is not None and owner.tg_id != pending.tg_id:
             # One Xbox account per person (SPEC 1): otherwise the same
             # achievements would be published twice under different names.
-            raise ConnectError("Этот Xbox-аккаунт уже подключён другим пользователем бота.")
+            raise ConnectError("Этот XBOX-аккаунт уже подключён другим пользователем бота.")
 
         await self._auth.store_identity(pending.tg_id, identity)
         log.info("tg_id=%s linked xuid=%s", pending.tg_id, identity.xuid)

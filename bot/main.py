@@ -151,10 +151,10 @@ async def run(settings: Settings) -> None:
         # No achievements yet means this account is new to the bot, not someone
         # signing in again after his token expired.
         is_new = not await repo.has_any_achievements(identity.xuid)
-        await bot.send_message(tg_id, f"✅ Подключил Xbox: {identity.gamertag}")
+        await bot.send_message(tg_id, f"✅ Подключил XBOX: {identity.gamertag}")
         await notifier.user_connected(tg_id, identity.gamertag, is_new=is_new)
 
-        # Pressed «Подключить Xbox» from inside a specific group: finish the
+        # Pressed «Подключить XBOX» from inside a specific group: finish the
         # job and subscribe him there too, instead of making him find
         # /subscribe on his own right after he just did the hard part (6.3).
         if origin_chat_id is not None and await repo.chat_exists(origin_chat_id):
@@ -246,8 +246,8 @@ async def _publish_command_menu(bot: Bot) -> None:
     private = [
         BotCommand(command="panel", description="Моя панель и настройки"),
         BotCommand(command="stats", description="Моя статистика"),
-        BotCommand(command="connect_xbox", description="Подключить Xbox"),
-        BotCommand(command="disconnect_xbox", description="Отключить Xbox"),
+        BotCommand(command="connect_xbox", description="Подключить XBOX"),
+        BotCommand(command="disconnect_xbox", description="Отключить XBOX"),
         BotCommand(command="connect_steam", description="Подключить Steam"),
         BotCommand(command="disconnect_steam", description="Отключить Steam"),
         BotCommand(command="hltb", description="Сколько идти игру (HowLongToBeat)"),

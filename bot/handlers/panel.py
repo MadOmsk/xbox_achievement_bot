@@ -86,7 +86,7 @@ async def panel_sync(
     tg_id = callback.from_user.id
     user = await repo.get_user(tg_id)
     if user is None or not user.xuid:
-        await callback.answer("Сначала подключи Xbox: /connect_xbox", show_alert=True)
+        await callback.answer("Сначала подключи XBOX: /connect_xbox", show_alert=True)
         return
 
     minutes_left = cooldown_minutes_left(
@@ -157,12 +157,12 @@ async def panel_disconnect_prompt(callback: CallbackQuery, repo: Repo) -> None:
 
     user = await repo.get_user(callback.from_user.id)
     if user is None or not user.xuid:
-        await callback.answer("Xbox и так не подключён.", show_alert=True)
+        await callback.answer("XBOX и так не подключён.", show_alert=True)
         return
     if isinstance(callback.message, Message):
         with contextlib.suppress(Exception):
             await callback.message.edit_text(
-                "Отключить Xbox?\n\n"
+                "Отключить XBOX?\n\n"
                 "Удалю токен и подписки. Историю достижений оставлю — она нужна статистике "
                 "чата, и при повторном входе старые достижения не хлынут в чат заново.\n\n"
                 f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно "
@@ -304,7 +304,7 @@ async def panel_chat_subscribe(callback: CallbackQuery, repo: Repo) -> None:
     chat_id = int(callback.data.rsplit(":", 1)[1])
     user = await repo.get_user(callback.from_user.id)
     if user is None or not user.xuid:
-        await callback.answer("Сначала подключи Xbox: /connect_xbox", show_alert=True)
+        await callback.answer("Сначала подключи XBOX: /connect_xbox", show_alert=True)
         return
     await repo.subscribe(chat_id, callback.from_user.id)
     await callback.answer("Подписал")
@@ -396,7 +396,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     )
 
     if user is None or not user.xuid:
-        text = "👤 Панель\n\nВход Xbox: — не подключён"
+        text = "👤 Панель\n\nВход XBOX: — не подключён"
         if steam_link is not None:
             text += f"\nВход Steam: {steam_link.display_name}"
         return text, keyboard
@@ -409,7 +409,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
     lines = [
         f"👤 {user.gamertag or 'без геймертега'}  ·  gamerscore {thousands(user.gamerscore or 0)}",
         "",
-        f"Вход Xbox:   {login}",
+        f"Вход XBOX:   {login}",
     ]
     # "Сегодня"/"За месяц" below already sum Steam achievements in too
     # (SPEC 9, M-Steam-2e) — this line is just the persona name, no counter
@@ -428,7 +428,7 @@ async def render_panel(repo: Repo, tg_id: int) -> tuple[str, InlineKeyboardMarku
         f"Часовой пояс: {format_offset(tz_offset)}",
     ]
     if needs_reconnect:
-        lines += ["", "Доступ к Xbox истёк — жми «Подключить заново» ниже."]
+        lines += ["", "Доступ к XBOX истёк — жми «Подключить заново» ниже."]
     if recent:
         lines += ["", "Последние достижения:"]
         lines += [

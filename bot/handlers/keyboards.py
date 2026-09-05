@@ -48,7 +48,7 @@ def timezone_keyboard(*, full: bool = False, skippable: bool = True) -> InlineKe
 
 def connect_keyboard(url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Подключить Xbox", url=url)]]
+        inline_keyboard=[[InlineKeyboardButton(text="Подключить XBOX", url=url)]]
     )
 
 
@@ -114,7 +114,7 @@ def panel_keyboard(
         # to apply it to.
         return InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="🔗 Подключить Xbox", callback_data="relogin")]
+                [InlineKeyboardButton(text="🔗 Подключить XBOX", callback_data="relogin")]
             ]
         )
 
@@ -136,7 +136,7 @@ def panel_keyboard(
         ],
         [InlineKeyboardButton(text="💬 Мои чаты ▸", callback_data="panel:chatlist")],
         [InlineKeyboardButton(text="🔄 Синхронизировать", callback_data="panel:sync")],
-        [InlineKeyboardButton(text="🔕 Отключить Xbox", callback_data="panel:disconnect")],
+        [InlineKeyboardButton(text="🔕 Отключить XBOX", callback_data="panel:disconnect")],
         [InlineKeyboardButton(text="Обновить", callback_data="panel:refresh")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -71,7 +71,7 @@ def test_hub_keyboard_has_exactly_four_buttons_and_carries_the_chat_id() -> None
     markup = hub_keyboard("mybot", CHAT_ID)
     buttons = [b for row in markup.inline_keyboard for b in row]
     assert len(buttons) == 4
-    connect_button = next(b for b in buttons if b.text == "🔗 Подключить Xbox")
+    connect_button = next(b for b in buttons if b.text == "🔗 Подключить XBOX")
     assert connect_button.url is not None
     assert f"start=connect{CHAT_ID}" in connect_button.url
     steam_button = next(b for b in buttons if b.text == "🎮 Подключить Steam")
@@ -188,7 +188,7 @@ def test_help_text_explains_what_the_bot_does_and_the_three_paths() -> None:
     "connected but not publishing" and "something's broken" — not a two-step
     instruction that assumes only new users read it."""
     assert "достижен" in HELP_TEXT.split("\n\n")[0].lower()  # the "what I do" line
-    assert "Подключить Xbox" in HELP_TEXT
+    assert "Подключить XBOX" in HELP_TEXT
     assert "Публиковать мои достижения" in HELP_TEXT
     assert "заново" in HELP_TEXT
     assert "/who" in HELP_TEXT

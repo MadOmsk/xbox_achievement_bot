@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 router = Router(name="connect")
 
 GREETING = (
-    "Привет! Я публикую в чат достижения Xbox — свои и других участников.\n\n"
+    "Привет! Я публикую в чат достижения XBOX — свои и других участников.\n\n"
     "Что умею:\n"
     "• ловлю новые достижения и пишу о них в чат;\n"
     "• фильтрую по редкости, если не хочешь публиковать всё подряд;\n"
@@ -74,13 +74,13 @@ async def start_with_payload(
         return
     is_connect, origin_chat_id = _parse_connect_payload(command.args or "")
     if is_connect:
-        # Straight to the login link: the person pressed «Подключить Xbox» in a
+        # Straight to the login link: the person pressed «Подключить XBOX» in a
         # group and does not need the whole greeting again. If the button
         # carried which group it was pressed in, we auto-subscribe him there
         # once the login actually succeeds (see on_linked in bot/main.py).
         user = await repo.get_user(message.chat.id)
         if user is not None and user.xuid:
-            await message.answer("Xbox уже подключён. Настройки — /panel.")
+            await message.answer("XBOX уже подключён. Настройки — /panel.")
             return
         await _send_login_link(message, connect, origin_chat_id=origin_chat_id)
         return
@@ -99,7 +99,7 @@ async def connect_command(message: Message, repo: Repo, connect: ConnectService)
     user = await repo.get_user(message.chat.id)
     if user is not None and user.xuid:
         await message.answer(
-            "Xbox уже подключён. Если нужно войти заново — сначала /disconnect_xbox."
+            "XBOX уже подключён. Если нужно войти заново — сначала /disconnect_xbox."
         )
         return
     await _send_login_link(message, connect)
@@ -109,7 +109,7 @@ async def connect_command(message: Message, repo: Repo, connect: ConnectService)
 async def disconnect_command(message: Message, repo: Repo) -> None:
     user = await repo.get_user(message.chat.id)
     if user is None or not user.xuid:
-        await message.answer("Xbox и так не подключён.")
+        await message.answer("XBOX и так не подключён.")
         return
 
     keyboard = InlineKeyboardMarkup(
@@ -119,7 +119,7 @@ async def disconnect_command(message: Message, repo: Repo) -> None:
         ]
     )
     await message.answer(
-        "Отключить Xbox?\n\n"
+        "Отключить XBOX?\n\n"
         "Удалю токен и подписки. Историю достижений оставлю — она нужна статистике чата, "
         "и при повторном входе старые достижения не хлынут в чат заново.\n\n"
         f"Само разрешение остаётся в аккаунте Microsoft — убрать его можно только "

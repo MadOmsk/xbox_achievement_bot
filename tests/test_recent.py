@@ -27,9 +27,11 @@ def row(
 
 
 def test_recent_row_mentions_rarity_badge() -> None:
-    assert "💎" in _recent_row(row(rarity_percent=2.4))
-    assert "💎" not in _recent_row(row(rarity_percent=None))
-    assert "⭐" not in _recent_row(row(rarity_percent=None))
+    """The badge leads the line now, not a fixed generic bullet (2026-09-05)
+    — it always shows one of the two icons, never both a bullet and a badge
+    on the same "common" row."""
+    assert _recent_row(row(rarity_percent=2.4)).startswith("💎 ")
+    assert _recent_row(row(rarity_percent=None)).startswith("🏆 ")
 
 
 def test_recent_row_gamerscore_is_in_parentheses() -> None:

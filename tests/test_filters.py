@@ -5,7 +5,17 @@ from __future__ import annotations
 import pytest
 
 from bot.db.repo import AchievementRow, ChatTarget
-from bot.services.achievements import format_digest, format_single, passes_filters
+from bot.services.achievements import format_digest, format_single, passes_filters, rarity_badge
+
+
+def test_rarity_badge_is_always_one_of_two_icons() -> None:
+    """No third "no badge" state (2026-09-05) — unproven defaults to the
+    cup rather than going unbadged."""
+    assert rarity_badge(2.4) == "💎"
+    assert rarity_badge(15.0) == "💎"  # boundary — inclusive
+    assert rarity_badge(15.1) == "🏆"
+    assert rarity_badge(92.2) == "🏆"
+    assert rarity_badge(None) == "🏆"
 
 
 def achievement(
@@ -101,14 +111,18 @@ def test_single_message_is_the_standardized_form() -> None:
     rather than trailing the percentage."""
     text = format_single("Igor", achievement(rarity=2.4), "Halo Infinite")
     assert "<b>Igor</b> получает достижение" in text
-    assert "Halo Infinite (<i>🟢 Xbox</i>)" in text
+    assert "Halo Infinite (<i>🟢 XBOX</i>)" in text
     assert "💎 «Ashes to Ashes» · 20 G · редкость 2.4%" in text
 
 
-def test_single_message_for_x360_has_no_rarity_segment() -> None:
+def test_single_message_for_x360_has_no_rarity_percent_but_still_a_badge() -> None:
+    """No rarity_percent to show a number for (Xbox 360 never carries one),
+    but the badge itself still shows — unproven defaults to the cup, not to
+    no badge at all (found live: a whole game with no badge anywhere read
+    as broken, not as "no data", 2026-09-05)."""
     text = format_single("Igor", achievement(rarity=None, platform="x360"), "Halo 3")
-    assert "Halo 3 (<i>🟢 Xbox 360</i>)" in text
-    assert "«Ashes to Ashes» · 20 G" in text
+    assert "Halo 3 (<i>🟢 XBOX 360</i>)" in text
+    assert "🏆 «Ashes to Ashes» · 20 G" in text
     assert "редкость" not in text
 
 
